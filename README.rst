@@ -7,7 +7,7 @@ Geometric Calibration
         :target: https://pypi.python.org/pypi/geometric_calibration
 
 .. image:: https://img.shields.io/travis/mrossi93/geometric_calibration.svg
-        :target: https://travis-ci.com/mrossi93/geometric_calibration
+        :target: https://travis-ci.org/mrossi93/geometric_calibration
 
 .. image:: https://readthedocs.org/projects/geometric-calibration/badge/?version=latest
         :target: https://geometric-calibration.readthedocs.io/en/latest/?badge=latest
