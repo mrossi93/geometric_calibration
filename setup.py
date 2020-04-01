@@ -10,9 +10,7 @@ with open("README.rst") as readme_file:
 with open("HISTORY.rst") as history_file:
     history = history_file.read()
 
-requirements = [
-    "Click>=7.0",
-]
+requirements = ["Click>=7.0", "matplotlib", "numpy", "scipy"]
 
 setup_requirements = [
     "pytest-runner",
@@ -38,7 +36,9 @@ setup(
     ],
     description="A utility to perform Geometric Calibration of a C-Arm Structure mounted on a robotic system",
     entry_points={
-        "console_scripts": ["geometric_calibration=geometric_calibration.cli:main",],
+        "console_scripts": [
+            "geometric_calibration=geometric_calibration.cli:main",
+        ],
     },
     install_requires=requirements,
     license="MIT license",
