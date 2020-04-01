@@ -171,7 +171,9 @@ def calibrate_projection(
     if drag_and_drop is True:
         # Overlay reference bbs with projection
         r2d_corrected = drag_and_drop_bbs(
-            curr_proj=img, bbs_proj=r2d, grayscale_range=grayscale_range
+            projection_path=img,
+            bbs_projected=r2d,
+            grayscale_range=grayscale_range,
         )
 
     # Starting from the updated coordinates, define a search area around them
