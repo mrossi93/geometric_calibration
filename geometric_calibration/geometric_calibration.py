@@ -22,6 +22,7 @@ from geometric_calibration.utils import (
     search_bbs_centroids,
 )
 
+
 def calibrate(projection_dir, bbs_3d):
     # RCS: room coordinate system
     # A: isocenter
