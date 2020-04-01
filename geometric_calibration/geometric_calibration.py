@@ -24,6 +24,15 @@ from geometric_calibration.utils import (
 
 
 def calibrate(projection_dir, bbs_3d):
+    """Main Calibration routines.
+
+    :param projection_dir: path to directory containing .raw files
+    :type projection_dir: str
+    :param bbs_3d: array containing 3D coordinates of BBs
+    :type bbs_3d: numpy.array
+    :return: dictionary with calibration results
+    :rtype: dict
+    """
     # RCS: room coordinate system
     # A: isocenter
 
@@ -103,6 +112,26 @@ def calibrate_projection(
     image_center=None,
     drag_and_drop=True,
 ):
+    """Calibration of single .raw image.
+
+    :param projection_file: path to file
+    :type projection_file: str
+    :param bbs_3d: 3D coordinates of phantom's reference points
+    :type bbs_3d: numpy.array
+    :param angle: gantry angle for current projection
+    :type angle: float
+    :param angle_offset: angle offset for panel, defaults to 0
+    :type angle_offset: int, optional
+    :param image_center: center of image, defaults to None
+    :type image_center: list, optional
+    :param drag_and_drop: whether or not perform Drag&Drop correction routines,
+     typically set to True for first projection. Defaults to True
+    :type drag_and_drop: bool, optional
+    :raises Exception: if less than 5 BBs centroids are recognized, optimizer
+     automatically fails since calibration can't be consider reliable
+    :return: dictionary with calibration results for current projection
+    :rtype: dict
+    """
     results = {}
 
     # image dimensions in pixels (not full resolution) - datasheet
@@ -129,7 +158,9 @@ def calibrate_projection(
     # Project points
     # Project points starting from extrinsic and intrinsic parameters
     # generate proj_matrix (extrinsic and intrinsic parameters)
-    T = create_camera_matrix(panel_orientation, sid, sad, pixel_size, isocenter)
+    T = create_camera_matrix(
+        panel_orientation, sid, sad, pixel_size, isocenter
+    )  # noqa: E501
     # projected coordinates of brandis on panel plane
     r2d = project_camera_matrix(
         bbs_3d, image_center, T
@@ -166,7 +197,7 @@ def calibrate_projection(
     # Calibration - non linear data fitting optimization problem
     index = np.where(~np.isnan(bbs_centroid[:, 0]))[0]
 
-    # Estimated bbs
+    # Estimated BBs
     bbs_estim_init = bbs_centroid[
         ~np.isnan(bbs_centroid).any(axis=1)
     ]  # not consider if out of searching area
@@ -201,7 +232,7 @@ def calibrate_projection(
         sad + sid_sad_limit,
     ]
 
-    if index.shape[0] > 5:  # at least 5 bbs
+    if index.shape[0] > 5:  # at least 5 BBs
         sol = least_squares(
             fun=calibration_cost_function,
             x0=parameters,
@@ -229,7 +260,7 @@ def calibrate_projection(
 
     bbs_estim_final = project_camera_matrix(
         bbs_3d, image_center_new, T
-    )  # projected bbs (considering unknown)
+    )  # projected BBs (considering unknown)
 
     # calculate improvement
     err_init = bbs_estim_init - r2d[index, :]  # estimated - projected
@@ -269,6 +300,23 @@ def calibrate_projection(
 def calibration_cost_function(
     param, bbs_3d, pixel_size, dim, bbs_2d, isocenter
 ):
+    """Cost Function for calibration optimizers.
+
+    :param param: parameters to be optimized
+    :type param: list
+    :param bbs_3d: 3D coordinates of reference BBs
+    :type bbs_3d: numpy.array
+    :param pixel_size: pixel dimensions in mm
+    :type pixel_size: list
+    :param dim: image dimensions
+    :type dim: list
+    :param bbs_2d: 2D coordinates of BBs projected on the current image
+    :type bbs_2d: numpy.array
+    :param isocenter: coordinates of isocenter
+    :type isocenter: numpy.array
+    :return: cost function value to be minimized
+    :rtype: float
+    """
     # unknown
     panel_orientation = np.array(param[:3])
     img_center = np.array(param[3:5])
@@ -292,6 +340,11 @@ def calibration_cost_function(
 
 
 def plot_calibration_results(calib_results):
+    """Plot source/panel position after calibration.
+
+    :param calib_results: dictionary containing results of a calibration
+    :type calib_results: dict
+    """
     source_pos = np.array(calib_results["source"])
     panel_pos = np.array(calib_results["panel"])
 
@@ -331,11 +384,14 @@ def plot_calibration_results(calib_results):
     plt.show()
 
 
-"""## Plot panel and source positions (trajectory)
-"""
-
-
 def save_lut(path, calib_results):
+    """Save LUT file for a calibration.
+
+    :param path: path to .raw file directory, where LUT will be saved
+    :type path: str
+    :param calib_results: dictionary containing results for a calibration
+    :type calib_results: dict
+    """
     angles = calib_results["proj_angles"]
     panel_orientation = calib_results["panel_orientation"]
     image_center = calib_results["img_center"]
@@ -385,7 +441,3 @@ def save_lut(path, calib_results):
         res_file.write(
             r"# END OF FILE. REQUIRED TO ENSURE '\n' at the end of last calibration line. NO MORE LINES AFTER THIS!!!"
         )
-
-
-"""function save_CBCT_LUT_sid_sad(file_name,angles,panel_rot,image_center,sid,sad)
-"""
