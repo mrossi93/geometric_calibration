@@ -286,7 +286,7 @@ def angle2rotm(rot_x, rot_y, rot_z):
     return trans
 
 
-def project_camera_matrix(r3d, image_center, camera_matrix):
+def project_camera_matrix(r3d, image_center, camera_matrix, resolution_scale=1):
     """Project 3D data starting from camera matrix based on intrinsic and
     extrinsic parameters
 
@@ -297,15 +297,20 @@ def project_camera_matrix(r3d, image_center, camera_matrix):
     :param camera_matrix: Projection matrix obtained combining extrinsic
      and intrinsic parameters
     :type camera_matrix: numpy.array
+    :param resolution_scale: resolution factor, when mode is "cbct" this 
+    parameter equals to 1, in 2D mode is 2 (because resolution is doubled),
+     defaults to 1
+    :type resolution_scale: int, optional
     :return: Array nx2 containing 2D coordinates of points projected on
      image plane [x,y]
     :rtype: numpy.array
     """
+
     r3d = np.append(r3d, np.ones((r3d.shape[0], 1)), axis=1)  # homogeneous
 
     r3d = np.matmul(camera_matrix, r3d.T).T  # apply proj_matrix and project
-    r3d[:, 0] = np.divide(r3d[:, 0], r3d[:, 2]) + image_center[0]  # offset
-    r3d[:, 1] = np.divide(r3d[:, 1], r3d[:, 2]) + image_center[1]  # offset
+    r3d[:, 0] = np.divide(r3d[:, 0], r3d[:, 2]) * resolution_scale + image_center[0]  # offset
+    r3d[:, 1] = np.divide(r3d[:, 1], r3d[:, 2]) * resolution_scale + image_center[1]  # offset
     r2d = r3d[:, :2]
 
     return r2d

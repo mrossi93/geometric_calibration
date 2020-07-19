@@ -1,4 +1,5 @@
 """This module contains some function for I/O purposes."""
+import os
 import numpy as np
 from geometric_calibration.utils import angle2rotm, deg2rad
 
@@ -46,7 +47,7 @@ def read_img_label_file(filename):
         proj_file = []  # last part of the projection file path
         angles = []  # angles of rotation of each image
         for line in file:
-            proj_file.append(line.split(" ")[0].split("\\")[-1])
+            proj_file.append(os.path.basename(line.split(" ")[0]))
             angles.append(float(line.split(" ")[1]))
 
     return proj_file, angles

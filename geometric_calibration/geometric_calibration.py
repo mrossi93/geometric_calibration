@@ -23,13 +23,17 @@ from geometric_calibration.utils import (
 )
 
 
-def calibrate(projection_dir, bbs_3d):
-    """Main Calibration routines.
+def calibrate_cbct(projection_dir, bbs_3d, sad, sid):
+    """Main CBCT Calibration routines.
 
     :param projection_dir: path to directory containing .raw files
     :type projection_dir: str
     :param bbs_3d: array containing 3D coordinates of BBs
     :type bbs_3d: numpy.array
+    :param sad: nominal source to isocenter (A) distance
+    :type sad: float
+    :param sid: nominal source to image distance
+    :type sid: float
     :return: dictionary with calibration results
     :rtype: dict
     """
@@ -37,7 +41,7 @@ def calibrate(projection_dir, bbs_3d):
     # A: isocenter
 
     # Read image labels
-    labels_file_path = projection_dir + "\\imgLabels.txt"
+    labels_file_path = os.path.join(projection_dir, "imgLabels.txt")
     proj_file, angles = read_img_label_file(labels_file_path)
 
     # Initialize output dictionary
@@ -57,10 +61,10 @@ def calibrate(projection_dir, bbs_3d):
     # Calibrate views
     with click.progressbar(
         iterable=range(len(angles)), fill_char="=", empty_char=" ",
-    ) as bar:
-        for k in bar:
-            proj_path = (
-                projection_dir + "\\" + proj_file[k]
+    ) as prog_bar:
+        for k in prog_bar:
+            proj_path = os.path.join(
+                projection_dir, proj_file[k]
             )  # path of the current image
 
             if k == 0:  # no indications other than nominal values
@@ -68,8 +72,13 @@ def calibrate(projection_dir, bbs_3d):
                 view_results = calibrate_projection(
                     proj_path,
                     bbs_3d,
-                    angles[k],
+                    sad=sad,
+                    sid=sid,
+                    angle=angles[k],
                     angle_offset=0,
+                    img_dim=[1024, 768],
+                    pixel_size=[0.388, 0.388],
+                    search_area=7,
                     drag_and_drop=True,
                 )
             else:  # if not first iteration
@@ -81,8 +90,13 @@ def calibrate(projection_dir, bbs_3d):
                 view_results = calibrate_projection(
                     proj_path,
                     bbs_3d,
-                    angles[k],
+                    sad=sad,
+                    sid=sid,
+                    angle=angles[k - 1],
                     angle_offset=angle_offset,
+                    img_dim=[1024, 768],
+                    pixel_size=[0.388, 0.388],
+                    search_area=7,
                     image_center=image_center,
                     drag_and_drop=False,
                 )
@@ -104,11 +118,101 @@ def calibrate(projection_dir, bbs_3d):
     return results
 
 
+def calibrate_2d(projection_dir, bbs_3d, sad, sid):
+    """Main 2D Calibration routines.
+
+    :param projection_dir: path to directory containing .raw files
+    :type projection_dir: str
+    :param bbs_3d: array containing 3D coordinates of BBs
+    :type bbs_3d: numpy.array
+    :param sad: nominal source to isocenter (A) distance
+    :type sad: float
+    :param sid: nominal source to image distance
+    :type sid: float
+    :return: dictionary with calibration results
+    :rtype: dict
+    """
+    # RCS: room coordinate system
+    # A: isocenter
+
+    # Find projection files in the current folder
+    proj_file = []
+    angles = []
+
+    for f in os.listdir(projection_dir):
+        if "AP.raw" or "RL.raw" in f:
+            proj_file.append(f)
+            if "AP" in f:
+                angles.append(0)
+            elif "RL" in f:
+                angles.append(90)
+
+    # Initialize output dictionary
+    results = {
+        "proj_angles": [],
+        "panel_orientation": [],
+        "sid": [],
+        "sad": [],
+        "isocenter": [],
+        "source": [],
+        "panel": [],
+        "img_center": [],
+        "err_init": [],
+        "err_final": [],
+    }
+
+    # Calibrate views
+    with click.progressbar(
+        iterable=range(len(angles)), fill_char="=", empty_char=" ",
+    ) as prog_bar:
+        for k in prog_bar:
+            proj_path = os.path.join(
+                projection_dir, proj_file[k]
+            )  # path of the current image
+
+            # Calibrate views with drag and drop procedure
+            view_results = calibrate_projection(
+                proj_path,
+                bbs_3d,
+                sad=sad,
+                sid=sid,
+                angle=angles[k],
+                angle_offset=0,
+                img_dim=[2048, 1536],
+                pixel_size=[0.388, 0.388],
+                search_area=14,
+                resolution_factor=2,
+                drag_and_drop=True,
+            )
+
+            # Update output dictionary
+            results["proj_angles"].append(view_results["proj_angle"])
+            results["panel_orientation"].append(
+                view_results["panel_orientation"]
+            )
+            results["sid"].append(view_results["sid"])
+            results["sad"].append(view_results["sad"])
+            results["isocenter"].append(view_results["isocenter"])
+            results["source"].append(view_results["source"])
+            results["panel"].append(view_results["panel"])
+            results["img_center"].append(view_results["img_center"])
+            results["err_init"].append(view_results["err_init"])
+            results["err_final"].append(view_results["err_final"])
+
+    return results
+
+
 def calibrate_projection(
     projection_file,
     bbs_3d,
+    sad,
+    sid,
     angle,
     angle_offset=0,
+    img_dim=[1024, 768],
+    pixel_size=[0.388, 0.388],
+    search_area=7,
+    resolution_factor=1,
     image_center=None,
     drag_and_drop=True,
 ):
@@ -118,10 +222,26 @@ def calibrate_projection(
     :type projection_file: str
     :param bbs_3d: 3D coordinates of phantom's reference points
     :type bbs_3d: numpy.array
+    :param sad: nominal source to isocenter (A) distance
+    :type sad: float
+    :param sid: nominal source to image distance
+    :type sid: float
     :param angle: gantry angle for current projection
     :type angle: float
     :param angle_offset: angle offset for panel, defaults to 0
     :type angle_offset: int, optional
+    :param img_dim: image dimensions in pixels, defaults to [1024, 768]
+    :type img_dim: list, optional
+    :param pixel_size: pixel dimensions in mm, defaults to [0.388, 0.388]
+    :type pixel_size: list, optional
+    :param search_area: dimension of reference point's searching area, defaults to 7
+    :type search_area: int, optional
+    :param resolution_factor: resolution factor, when mode is "cbct" this 
+    parameter equals to 1, in 2D mode is 2 (because resolution is doubled),
+     defaults to 1
+    :type resolution_factor: int, optional
+        :param image_center: [description], defaults to None
+    :type image_center: [type], optional
     :param image_center: center of image, defaults to None
     :type image_center: list, optional
     :param drag_and_drop: whether or not perform Drag&Drop correction routines,
@@ -132,19 +252,11 @@ def calibrate_projection(
     :return: dictionary with calibration results for current projection
     :rtype: dict
     """
+
     results = {}
 
-    # image dimensions in pixels (not full resolution) - datasheet
-    dim = [1024, 768]
-    # pixel dimensions in mm
-    pixel_size = [0.388, 0.388]
-    # 2*search_area (both in width and height)
-    search_area = 7
-    sad = 1115 + 57.2  # source to isocenter (A) distance
-    sid = sad + 500  # source to image distance
-
     if image_center is None:  # in case image_center is not declared
-        image_center = [dim[1] / 2, dim[0] / 2]
+        image_center = [img_dim[1] / 2, img_dim[0] / 2]
     isocenter = [0, 0, 0]
 
     # panel orientation (from panel to brandis reference - rotation along y)
@@ -153,17 +265,15 @@ def calibrate_projection(
     )
 
     # Load projection
-    img = read_projection(projection_file, dim)
+    img = read_projection(projection_file, img_dim)
 
     # Project points
     # Project points starting from extrinsic and intrinsic parameters
     # generate proj_matrix (extrinsic and intrinsic parameters)
-    T = create_camera_matrix(
-        panel_orientation, sid, sad, pixel_size, isocenter
-    )  # noqa: E501
+    T = create_camera_matrix(panel_orientation, sid, sad, pixel_size, isocenter)
     # projected coordinates of brandis on panel plane
     r2d = project_camera_matrix(
-        bbs_3d, image_center, T
+        bbs_3d, image_center, T, resolution_factor
     )  # 2d coordinates of reference points
 
     grayscale_range = get_grayscale_range(img)
@@ -184,7 +294,7 @@ def calibrate_projection(
             img=img,
             ref_2d=r2d_corrected,
             search_area=search_area,
-            dim_img=dim,
+            dim_img=img_dim,
             grayscale_range=grayscale_range,
         )
     else:
@@ -192,7 +302,7 @@ def calibrate_projection(
             img=img,
             ref_2d=r2d,
             search_area=search_area,
-            dim_img=dim,
+            dim_img=img_dim,
             grayscale_range=grayscale_range,
         )
 
@@ -228,8 +338,8 @@ def calibrate_projection(
         angle_limit,
         np.pi,
         angle_limit,
-        dim[1],
-        dim[0],
+        img_dim[1],
+        img_dim[0],
         sid + sid_sad_limit,
         sad + sid_sad_limit,
     ]
@@ -238,7 +348,13 @@ def calibrate_projection(
         sol = least_squares(
             fun=calibration_cost_function,
             x0=parameters,
-            args=(bbs_real_init, pixel_size, dim, bbs_estim_init, isocenter),
+            args=(
+                bbs_real_init,
+                pixel_size,
+                img_dim,
+                bbs_estim_init,
+                isocenter,
+            ),
             method="trf",
             bounds=(low_bound, up_bound)
             # verbose=2,
@@ -386,13 +502,15 @@ def plot_calibration_results(calib_results):
     plt.show()
 
 
-def save_lut(path, calib_results):
+def save_lut(path, calib_results, mode):
     """Save LUT file for a calibration.
 
     :param path: path to .raw file directory, where LUT will be saved
     :type path: str
     :param calib_results: dictionary containing results for a calibration
     :type calib_results: dict
+    :param calib_results: acquisition modality for calibration
+    :type calib_results: string
     """
     angles = calib_results["proj_angles"]
     panel_orientation = calib_results["panel_orientation"]
@@ -402,13 +520,18 @@ def save_lut(path, calib_results):
 
     clock = datetime.now()
 
-    filename = "CBCT_LUT_{}_{:02}_{:02}-{:02}_{:02}.txt".format(
-        clock.year, clock.month, clock.day, clock.hour, clock.minute,
-    )
+    if mode == "cbct":
+        filename = "CBCT_LUT_{}_{:02}_{:02}-{:02}_{:02}.txt".format(
+            clock.year, clock.month, clock.day, clock.hour, clock.minute,
+        )
+    elif mode == "2d":
+        filename = "2D_LUT_{}_{:02}_{:02}-{:02}_{:02}.txt".format(
+            clock.year, clock.month, clock.day, clock.hour, clock.minute,
+        )
     output_file = os.path.join(path, filename)
 
     with open(output_file, "w") as res_file:
-        res_file.write("#Look Up Table for CBCT reconstruction\n")
+        res_file.write(f"#Look Up Table for {mode.upper()} reconstruction\n")
         res_file.write(
             "#Angle (deg) | Panel Orientation(rad) [X  Y  Z] | Image_center(pixel) X Y | SID(mm) | SAD(mm)\n"
         )

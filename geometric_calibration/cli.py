@@ -2,20 +2,36 @@
 import sys
 import os
 import click
+import click_config_file
 from geometric_calibration.reader import read_bbs_ref_file
 from geometric_calibration.geometric_calibration import (
-    calibrate,
+    calibrate_cbct,
+    calibrate_2d,
     save_lut,
     plot_calibration_results,
 )
 
+CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
 
-def save_routine(path, results):
+if getattr(sys, "frozen", False):
+    # If the application is run as a bundle, the PyInstaller bootloader
+    # extends the sys module by a flag frozen=True and sets the app
+    # path into variable _MEIPASS'.
+    APPLICATION_PATH = sys._MEIPASS
+else:
+    APPLICATION_PATH = os.path.dirname(os.path.abspath(__file__))
+
+
+REF_BBS_DEFAULT_PATH = os.path.join(APPLICATION_PATH, "app_data")
+REF_BBS_DEFAULT_PATH = os.path.join(REF_BBS_DEFAULT_PATH, "ref_brandis.txt")
+
+
+def save_CLI(path, results, mode):
     found_old = False
     old_files = []
 
     for file in os.listdir(path):
-        if "CBCT" in file:
+        if "LUT" in file:
             found_old = True
             old_files.append(file)
 
@@ -30,73 +46,95 @@ def save_routine(path, results):
                 os.remove(os.path.join(path, file))
             click.echo("---\tOld LUT deleted\t---")
 
-    save_lut(path, results)
+    save_lut(path, results, mode)
     click.echo("---\tNew LUT saved\t---")
     return
 
 
-@click.command()
-@click.option("--ref", "-r", help="Reference File for calibration phantom")
-@click.option("--dir", "-d", help="Path to directory with .raw projection")
-def main(ref, dir):
-    """Console script for geometric_calibration."""
+@click.command(context_settings=CONTEXT_SETTINGS)
+@click.option(
+    "--mode", "-m", help="Acquisition modality: 'cbct' or '2d'", default="cbct"
+)
+@click.option(
+    "--input_path",
+    "-i",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    help="""Path .raw projection. It can be a folder or a single file depending on
+     'mode' parameter""",
+    default=os.getcwd(),
+)
+@click.option(
+    "--sad",
+    type=click.FLOAT,
+    help="Nominal source to isocenter distance",
+    default=1172.2,
+)
+@click.option(
+    "--sid",
+    type=click.FLOAT,
+    help="Nominal source to image distance",
+    default=1672.2,
+)
+@click.option(
+    "--ref",
+    "-r",
+    type=click.Path(exists=True, file_okay=True, dir_okay=False),
+    help="Reference File for calibration phantom",
+    default=REF_BBS_DEFAULT_PATH,
+)
+@click_config_file.configuration_option()
+def main(mode, input_path, sad, sid, ref):
+    """Console script for geometric_calibration.
 
-    if ref is None:
-        click.echo(
-            click.style(
-                "Error: please indicate the path to Reference File", fg="red",
-            )
-        )
-        return 1
-    elif dir is None:
-        click.echo(
-            click.style(
-                "Error: please indicate the path to directory with .raw projection",
-                fg="red",
-            )
-        )
-        return 1
-    else:
-        bbs = read_bbs_ref_file(ref)
+    Author: Matteo Rossi"""
+
+    bbs = read_bbs_ref_file(ref)
+
+    click.echo("Calibration Parameters:")
+    click.echo("Mode: '{}'".format(mode))
+    click.echo("Input Path: '{}'".format(input_path))
+    click.echo("SAD: '{}'".format(sad))
+    click.echo("SID: '{}'".format(sid))
+    click.echo("")
+
+    if mode == "cbct":
         click.echo("Calibrating the system. Please Wait...")
-        calibration_results = calibrate(dir, bbs)
+        # sad = 1115 + 57.2  # source to isocenter (A) distance
+        # sid = sad + 500  # source to image distance
+        calibration_results = calibrate_cbct(input_path, bbs, sad, sid)
+    elif mode == "2d":
+        click.echo("Calibrating the system. Please Wait...")
+        calibration_results = calibrate_2d(input_path, bbs, sad, sid)
+    else:
+        click.echo("Mode '{}' not recognized.".format(mode))
+        return 0
 
-        # TODO Stampare errori o simili
-
-        # TODO Inserire un prompt per decidere se salvare i risultati
-
-        opt = "s"
-        save_flag = False
-        while opt in ["s", "p", "c"]:
-            val = click.prompt(
-                """\nChoose an option:
-            s\tSave
-            p\tPlot
-            c\tClose
-            """,
-                prompt_suffix="\rYour choice: ",
-                type=str,
-            )
-
-            if val == "s":
-                save_routine(dir, calibration_results)
-                save_flag = True
-            elif val == "p":
-                plot_calibration_results(calibration_results)
-            elif val == "c":
-                if save_flag is False:
-                    if click.confirm(
-                        "New LUT not saved. Do you want to save it?",
-                        default=True,
-                        show_default=True,
-                    ):
-                        save_routine(dir, calibration_results)
-                break
-            else:
-                click.echo("Command '{}' not recognized.".format(val))
-
+    opt = "s"
+    save_flag = False
+    while opt in ["s", "p", "c"]:
+        user_choice = click.prompt(
+            """\nChoose an option:
+                s\tSave
+                p\tPlot
+                c\tClose
+                """,
+            prompt_suffix="\rYour choice: ",
+            type=str,
+        )
+        if user_choice == "s":
+            save_CLI(input_path, calibration_results, mode)
+            save_flag = True
+        elif user_choice == "p":
+            plot_calibration_results(calibration_results)
+        elif user_choice == "c":
+            if save_flag is False:
+                if click.confirm(
+                    "New LUT not saved. Do you want to save it?",
+                    default=True,
+                    show_default=True,
+                ):
+                    save_CLI(input_path, calibration_results, mode)
+            break
+        else:
+            click.echo("Command '{}' not recognized.".format(user_choice))
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())  # pragma: no cover
