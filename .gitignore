@@ -105,5 +105,5 @@ ENV/
 .vscode/
 
 # Personal Stuff
-tests/data/
+data/
 setup_exe.py
