@@ -107,3 +107,6 @@ ENV/
 # Personal Stuff
 data/
 setup_exe.py
+build_exe.bat
+gCal.bat
+gCal_config.ini

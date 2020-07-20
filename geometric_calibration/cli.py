@@ -26,7 +26,7 @@ REF_BBS_DEFAULT_PATH = os.path.join(APPLICATION_PATH, "app_data")
 REF_BBS_DEFAULT_PATH = os.path.join(REF_BBS_DEFAULT_PATH, "ref_brandis.txt")
 
 
-def save_CLI(path, results, mode):
+def save_cli(path, results, mode):
     found_old = False
     old_files = []
 
@@ -122,7 +122,7 @@ def main(mode, input_path, sad, sid, ref):
             type=str,
         )
         if user_choice == "s":
-            save_CLI(input_path, calibration_results, mode)
+            save_cli(input_path, calibration_results, mode)
             save_flag = True
         elif user_choice == "p":
             plot_calibration_results(calibration_results)
@@ -133,7 +133,7 @@ def main(mode, input_path, sad, sid, ref):
                     default=True,
                     show_default=True,
                 ):
-                    save_CLI(input_path, calibration_results, mode)
+                    save_cli(input_path, calibration_results, mode)
             break
         else:
             click.echo("Command '{}' not recognized.".format(user_choice))

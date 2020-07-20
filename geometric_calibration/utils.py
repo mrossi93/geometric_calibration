@@ -8,7 +8,7 @@ import matplotlib.patches as patches
 matplotlib.rcParams["toolbar"] = "None"
 
 
-class DraggablePoints(object):
+class DraggablePoints:
     """Draggable points on matplotlibe figure.
 
     Returns:
@@ -309,8 +309,12 @@ def project_camera_matrix(r3d, image_center, camera_matrix, resolution_scale=1):
     r3d = np.append(r3d, np.ones((r3d.shape[0], 1)), axis=1)  # homogeneous
 
     r3d = np.matmul(camera_matrix, r3d.T).T  # apply proj_matrix and project
-    r3d[:, 0] = np.divide(r3d[:, 0], r3d[:, 2]) * resolution_scale + image_center[0]  # offset
-    r3d[:, 1] = np.divide(r3d[:, 1], r3d[:, 2]) * resolution_scale + image_center[1]  # offset
+    r3d[:, 0] = (
+        np.divide(r3d[:, 0], r3d[:, 2]) * resolution_scale + image_center[0]
+    )  # offset
+    r3d[:, 1] = (
+        np.divide(r3d[:, 1], r3d[:, 2]) * resolution_scale + image_center[1]
+    )  # offset
     r2d = r3d[:, :2]
 
     return r2d

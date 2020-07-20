@@ -9,7 +9,8 @@ import matplotlib.pyplot as plt
 
 from geometric_calibration.reader import (
     read_img_label_file,
-    read_projection,
+    read_projection_hnc,
+    read_projection_raw,
 )
 
 from geometric_calibration.utils import (
@@ -60,7 +61,7 @@ def calibrate_cbct(projection_dir, bbs_3d, sad, sid):
 
     # Calibrate views
     with click.progressbar(
-        iterable=range(len(angles)), fill_char="=", empty_char=" ",
+        iterable=range(len(angles)), fill_char="=", empty_char=" "
     ) as prog_bar:
         for k in prog_bar:
             proj_path = os.path.join(
@@ -216,7 +217,7 @@ def calibrate_projection(
     image_center=None,
     drag_and_drop=True,
 ):
-    """Calibration of single .raw image.
+    """Calibration of a single projection.
 
     :param projection_file: path to file
     :type projection_file: str
@@ -234,10 +235,11 @@ def calibrate_projection(
     :type img_dim: list, optional
     :param pixel_size: pixel dimensions in mm, defaults to [0.388, 0.388]
     :type pixel_size: list, optional
-    :param search_area: dimension of reference point's searching area, defaults to 7
+    :param search_area: dimension of reference point's searching area, defaults
+     to 7
     :type search_area: int, optional
-    :param resolution_factor: resolution factor, when mode is "cbct" this 
-    parameter equals to 1, in 2D mode is 2 (because resolution is doubled),
+    :param resolution_factor: resolution factor, when mode is "cbct" this
+     parameter equals to 1, in 2D mode is 2 (because resolution is doubled),
      defaults to 1
     :type resolution_factor: int, optional
         :param image_center: [description], defaults to None
@@ -265,9 +267,11 @@ def calibrate_projection(
     )
 
     # Load projection
-    img = read_projection(projection_file, img_dim)
+    if ".raw" in projection_file:
+        img = read_projection_raw(projection_file, img_dim)
+    elif ".hnc" in projection_file:
+        img = read_projection_hnc(projection_file, img_dim)
 
-    # Project points
     # Project points starting from extrinsic and intrinsic parameters
     # generate proj_matrix (extrinsic and intrinsic parameters)
     T = create_camera_matrix(panel_orientation, sid, sad, pixel_size, isocenter)
@@ -415,9 +419,7 @@ def calibrate_projection(
     return results
 
 
-def calibration_cost_function(
-    param, bbs_3d, pixel_size, dim, bbs_2d, isocenter
-):
+def calibration_cost_function(param, bbs_3d, pixel_size, bbs_2d, isocenter):
     """Cost Function for calibration optimizers.
 
     :param param: parameters to be optimized
@@ -426,8 +428,6 @@ def calibration_cost_function(
     :type bbs_3d: numpy.array
     :param pixel_size: pixel dimensions in mm
     :type pixel_size: list
-    :param dim: image dimensions
-    :type dim: list
     :param bbs_2d: 2D coordinates of BBs projected on the current image
     :type bbs_2d: numpy.array
     :param isocenter: coordinates of isocenter
@@ -465,6 +465,7 @@ def plot_calibration_results(calib_results):
     """
     source_pos = np.array(calib_results["source"])
     panel_pos = np.array(calib_results["panel"])
+    isocenter = np.array(calib_results["isocenter"])
 
     def on_key_pressed(event):
         if event.key == "enter":
@@ -492,6 +493,15 @@ def plot_calibration_results(calib_results):
         marker=".",
         c="r",
         label="Panel Position",
+    )
+
+    ax.scatter(
+        isocenter[0, 0],
+        isocenter[0, 1],
+        isocenter[0, 2],
+        marker=".",
+        c="b",
+        label="Isocenter Position",
     )
 
     plt.title("Panel/Source position after calibration\nPress Enter to close")
