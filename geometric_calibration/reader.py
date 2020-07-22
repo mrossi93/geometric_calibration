@@ -1,4 +1,5 @@
 """This module contains some function for I/O purposes."""
+import os
 import numpy as np
 from geometric_calibration.utils import angle2rotm, deg2rad
 
@@ -46,13 +47,13 @@ def read_img_label_file(filename):
         proj_file = []  # last part of the projection file path
         angles = []  # angles of rotation of each image
         for line in file:
-            proj_file.append(line.split(" ")[0].split("\\")[-1])
+            proj_file.append(os.path.basename(line.split(" ")[0]))
             angles.append(float(line.split(" ")[1]))
 
     return proj_file, angles
 
 
-def read_projection(filename, dim):
+def read_projection_raw(filename, dim):
     """Read .raw file and load it into a Numpy array.
 
     :param filename: path to file
@@ -64,4 +65,25 @@ def read_projection(filename, dim):
     """
     image = np.fromfile(filename, dtype="uint16", sep="")
     image = np.reshape(image, newshape=[dim[1], dim[0]]).T
+    return image
+
+
+def read_projection_hnc(filename, dim):
+    """Read .hnc file and load it into a Numpy array.
+
+    :param filename: path to file
+    :type filename: str
+    :param dim: Dimension of image
+    :type dim: list
+    :return: array containing loaded .raw image
+    :rtype: numpy.array
+    """
+    with open(filename, "rb") as f:
+        # Read and discard header's bytes
+        f.read(512)
+        image = np.frombuffer(f.read(), dtype=np.uint16)
+
+        # Change the shape of the array to the actual shape of the picture
+        image.shape = (dim[0], dim[1])
+
     return image
