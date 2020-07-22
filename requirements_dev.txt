@@ -12,5 +12,5 @@ click-config-file==0.6.0
 pytest==5.4.1
 pytest-runner==5.2
 scipy==1.5.0
-numpy==1.19.0
+numpy==1.19.1
 matplotlib==3.2.2
