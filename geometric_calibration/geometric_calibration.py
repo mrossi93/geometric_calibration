@@ -141,7 +141,7 @@ def calibrate_2d(projection_dir, bbs_3d, sad, sid):
     angles = []
 
     for f in os.listdir(projection_dir):
-        if "AP.raw" or "RL.raw" in f:
+        if ("AP" or "RL") and (".raw" or ".hnc") in f:
             proj_file.append(f)
             if "AP" in f:
                 angles.append(0)
@@ -352,13 +352,7 @@ def calibrate_projection(
         sol = least_squares(
             fun=calibration_cost_function,
             x0=parameters,
-            args=(
-                bbs_real_init,
-                pixel_size,
-                img_dim,
-                bbs_estim_init,
-                isocenter,
-            ),
+            args=(bbs_real_init, pixel_size, bbs_estim_init, isocenter,),
             method="trf",
             bounds=(low_bound, up_bound)
             # verbose=2,
