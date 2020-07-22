@@ -30,7 +30,10 @@ A utility to perform Geometric Calibration of a C-Arm Structure mounted on a rob
 Features
 --------
 
-* TODO
+* C-arm calibration in two supported modality: 3D (CBCT), planar (AP/RL)
+* Support for reading projection in .raw or .hnc (Varian) format
+* Plot calibration results
+* Save LUT in .txt file
 
 Credits
 -------
