@@ -11,6 +11,8 @@ Click==7.1.2
 click-config-file==0.6.0
 pytest==5.4.1
 pytest-runner==5.2
+black==19.10b0
 scipy==1.5.1
 numpy==1.19.0
 matplotlib==3.2.2
+PyInstaller==3.6
