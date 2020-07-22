@@ -105,5 +105,8 @@ ENV/
 .vscode/
 
 # Personal Stuff
-tests/data/
+data/
 setup_exe.py
+build_exe.bat
+gCal.bat
+gCal_config.ini
