@@ -1,15 +1,19 @@
 """Console script for geometric_calibration."""
 import sys
 import os
+import winsound
 import click
 import click_config_file
 from geometric_calibration.reader import read_bbs_ref_file
 from geometric_calibration.geometric_calibration import (
     calibrate_cbct,
     calibrate_2d,
-    save_lut,
+    save_lut_new_style,
+    save_lut_classic_style,
+    save_lut_planar,
     plot_calibration_results,
 )
+from geometric_calibration.slideshow import slideshow
 
 CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
 
@@ -46,7 +50,27 @@ def save_cli(path, results, mode):
                 os.remove(os.path.join(path, file))
             click.echo("---\tOld LUT deleted\t---")
 
-    save_lut(path, results, mode)
+    # Se mode è CBCT allora prompt che chiede la modalità (default su classic)
+    if mode == "cbct":
+        lut_style = click.prompt(
+            """\nChoose a style:
+                    c\tClassic Style (6 columns)
+                    n\tNew Style (8 columns)
+                    """,
+            prompt_suffix="\rYour choice: ",
+            type=str,
+            default="c",
+        )
+        if lut_style == "c":
+            save_lut_classic_style(path, results)
+        elif lut_style == "n":
+            save_lut_new_style(path, results)
+        else:
+            print("Invalid style")
+            return
+    elif mode == "2d":
+        save_lut_planar(path, results)
+
     click.echo("---\tNew LUT saved\t---")
     return
 
@@ -76,6 +100,18 @@ def save_cli(path, results, mode):
     default=1672.2,
 )
 @click.option(
+    "--offset",
+    type=click.FLOAT,
+    help="Panel offset for Half-Fan Mode",
+    default=0,
+)
+@click.option(
+    "--drag_every",
+    type=click.INT,
+    help="Manually reposition the reference points every N projections",
+    default=1000,
+)
+@click.option(
     "--ref",
     "-r",
     type=click.Path(exists=True, file_okay=True, dir_okay=False),
@@ -83,7 +119,7 @@ def save_cli(path, results, mode):
     default=REF_BBS_DEFAULT_PATH,
 )
 @click_config_file.configuration_option()
-def main(mode, input_path, sad, sid, ref):
+def main(mode, input_path, sad, sid, offset, drag_every, ref):
     """Console script for geometric_calibration.
 
     Author: Matteo Rossi"""
@@ -95,27 +131,38 @@ def main(mode, input_path, sad, sid, ref):
     click.echo("Input Path: '{}'".format(input_path))
     click.echo("SAD: '{}'".format(sad))
     click.echo("SID: '{}'".format(sid))
-    click.echo("")
+    click.echo("Panel Offset: '{}'".format(offset))
+    click.echo("\nCalibrating the system. Please Wait...")
+
+    # Just to avoid division by zero, in case user wrongly set this parameter
+    if drag_every == 0:
+        drag_every = 1000
 
     if mode == "cbct":
-        click.echo("Calibrating the system. Please Wait...")
-        # sad = 1115 + 57.2  # source to isocenter (A) distance
-        # sid = sad + 500  # source to image distance
-        calibration_results = calibrate_cbct(input_path, bbs, sad, sid)
+        calibration_results = calibrate_cbct(
+            input_path,
+            bbs,
+            sad,
+            sid,
+            center_offset=offset,
+            drag_every=drag_every,
+        )
     elif mode == "2d":
-        click.echo("Calibrating the system. Please Wait...")
         calibration_results = calibrate_2d(input_path, bbs, sad, sid)
     else:
         click.echo("Mode '{}' not recognized.".format(mode))
         return 0
 
+    winsound.PlaySound("SystemExit", winsound.SND_ALIAS)
+
     opt = "s"
     save_flag = False
-    while opt in ["s", "p", "c"]:
+    while opt in ["s", "p", "l", "c"]:
         user_choice = click.prompt(
             """\nChoose an option:
                 s\tSave
                 p\tPlot
+                l\tSlideshow
                 c\tClose
                 """,
             prompt_suffix="\rYour choice: ",
@@ -126,6 +173,8 @@ def main(mode, input_path, sad, sid, ref):
             save_flag = True
         elif user_choice == "p":
             plot_calibration_results(calibration_results)
+        elif user_choice == "l":
+            slideshow(calibration_results, bbs, mode)
         elif user_choice == "c":
             if save_flag is False:
                 if click.confirm(
