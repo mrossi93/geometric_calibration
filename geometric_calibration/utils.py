@@ -5,6 +5,10 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
+from skimage.exposure import histogram
+from skimage.filters import threshold_otsu
+from skimage.measure import regionprops
+
 matplotlib.rcParams["toolbar"] = "None"
 
 
@@ -15,7 +19,7 @@ class DraggablePoints:
         DraggablePoints -- DraggablePoints object
     """
 
-    def __init__(self, artists, tolerance=10):
+    def __init__(self, artists, tolerance=15):
         for artist in artists:
             artist.set_picker(tolerance)
 
@@ -38,9 +42,7 @@ class DraggablePoints:
         self.x0 = 0
         self.y0 = 0
 
-        plt.title(
-            "Drag&Drop red points on the image.\nPress Enter to continue"
-        )  # noqa: E501
+        plt.title("Drag&Drop red points on the image.\nPress Enter to continue")
         plt.show()
 
     def on_press(self, event):
@@ -148,7 +150,9 @@ def drag_and_drop_bbs(projection_path, bbs_projected, grayscale_range):
     return r2d_corrected.final_coord
 
 
-def search_bbs_centroids(img, ref_2d, search_area, dim_img, grayscale_range):
+def search_bbs_centroids(
+    img, ref_2d, search_area, dim_img, grayscale_range, debug_level=0
+):
     """Search bbs based on projection.
 
     Starting from the updated coordinates, define a search area around them
@@ -181,6 +185,16 @@ def search_bbs_centroids(img, ref_2d, search_area, dim_img, grayscale_range):
         ind_row = round(curr_point[0])
         ind_col = round(curr_point[1])
 
+        # if bbs is not even inside the image, skip it
+        if (
+            (ind_row < 0)
+            or (ind_col < 0)
+            or (ind_row > dim_img[1])
+            or (ind_col > dim_img[0])
+        ):
+            bbs_centroid.append([np.nan, np.nan])
+            continue
+
         # define the field of research
         min_row = int(max([0, ind_row - search_area]))
         min_col = int(max([0, ind_col - search_area]))
@@ -190,10 +204,31 @@ def search_bbs_centroids(img, ref_2d, search_area, dim_img, grayscale_range):
         # define a mask on the original image to underline field of research
         sub_img = img[min_col:max_col, min_row:max_row]
 
-        sub_img = adjust_image(
-            sub_img, grayscale_range
-        )  # rescale grey level of the sub-image
+        # rescale grey level of the sub-image
+        sub_img = adjust_image(sub_img, grayscale_range)
 
+        # Binarize sub_image to extract the bbs
+        thresh = threshold_otsu(sub_img)
+        binary = sub_img > thresh
+
+        # Count how many pixel belong to background vs foreground
+        blob = np.count_nonzero(binary == 0)
+        background = np.count_nonzero(binary)
+
+        # if background is too dark, discard the bbs
+        if blob / background > 0.25:
+            bbs_centroid.append([np.nan, np.nan])
+            continue
+
+        # Extract centroid from thresholded sub_image
+        labeled_foreground = (sub_img < thresh).astype(int)
+        properties = regionprops(labeled_foreground, sub_img)
+        centroid = properties[0].centroid
+
+        # Append centroid to bbs list
+        bbs_centroid.append([min_row + centroid[1], min_col + centroid[0]])
+        """
+        ### ORIGINAL CODE
         # Search for the bbs in the image (basically very low intensity
         # surrounding by higher intensity pixel. ii,jj are the coordinates of
         # the pixels that have an intensity that is lower than the lowest
@@ -218,6 +253,37 @@ def search_bbs_centroids(img, ref_2d, search_area, dim_img, grayscale_range):
             bbs_centroid.append(
                 [np.nan, np.nan]
             )  # if out of the searching area
+        """
+        if debug_level == 2:
+            hist, hist_centers = histogram(sub_img, nbins=100)
+
+            fig, axes = plt.subplots(ncols=3, figsize=(8, 2.5))
+            ax = axes.ravel()
+            ax[0] = plt.subplot(1, 3, 1)
+            ax[1] = plt.subplot(1, 3, 2)
+            ax[2] = plt.subplot(1, 3, 3, sharex=ax[0], sharey=ax[0])
+
+            ax[0].imshow(
+                sub_img,
+                cmap="gray",
+                vmin=grayscale_range[0],
+                vmax=grayscale_range[1],
+            )
+            ax[0].set_title("Original")
+
+            ax[1].plot(hist_centers, hist, lw=2)
+            ax[1].set_title("Histogram")
+            ax[1].axvline(thresh, color="r")
+
+            ax[2].imshow(binary, cmap=plt.cm.gray)
+            ax[2].scatter(centroid[1], centroid[0], marker="*", c="g")
+            ax[2].set_title("Thresholded")
+
+            plt.draw()
+            plt.waitforbuttonpress(0)
+            plt.close()
+
+            # plt.show()
 
     if len(bbs_centroid) == 0:
         raise Exception(
@@ -225,6 +291,18 @@ def search_bbs_centroids(img, ref_2d, search_area, dim_img, grayscale_range):
         )
 
     bbs_centroid = np.array(bbs_centroid)
+
+    if debug_level >= 1:
+        bbs_dbg = bbs_centroid[~np.isnan(bbs_centroid).any(axis=1)]
+        print(bbs_dbg)
+
+        plt.imshow(
+            img, cmap="gray", vmin=grayscale_range[0], vmax=grayscale_range[1],
+        )
+        plt.scatter(bbs_dbg[:, 0], bbs_dbg[:, 1], marker=".", c="c", alpha=0.5)
+        plt.scatter(ref_2d[:, 0], ref_2d[:, 1], marker=".", c="r", alpha=0.5)
+        # plt.grid(True, color="r")
+        plt.show()
 
     return bbs_centroid
 
@@ -286,7 +364,7 @@ def angle2rotm(rot_x, rot_y, rot_z):
     return trans
 
 
-def project_camera_matrix(r3d, image_center, camera_matrix, resolution_scale=1):
+def project_camera_matrix(r3d, image_center, camera_matrix):
     """Project 3D data starting from camera matrix based on intrinsic and
     extrinsic parameters
 
@@ -297,10 +375,6 @@ def project_camera_matrix(r3d, image_center, camera_matrix, resolution_scale=1):
     :param camera_matrix: Projection matrix obtained combining extrinsic
      and intrinsic parameters
     :type camera_matrix: numpy.array
-    :param resolution_scale: resolution factor, when mode is "cbct" this 
-    parameter equals to 1, in 2D mode is 2 (because resolution is doubled),
-     defaults to 1
-    :type resolution_scale: int, optional
     :return: Array nx2 containing 2D coordinates of points projected on
      image plane [x,y]
     :rtype: numpy.array
@@ -309,12 +383,8 @@ def project_camera_matrix(r3d, image_center, camera_matrix, resolution_scale=1):
     r3d = np.append(r3d, np.ones((r3d.shape[0], 1)), axis=1)  # homogeneous
 
     r3d = np.matmul(camera_matrix, r3d.T).T  # apply proj_matrix and project
-    r3d[:, 0] = (
-        np.divide(r3d[:, 0], r3d[:, 2]) * resolution_scale + image_center[0]
-    )  # offset
-    r3d[:, 1] = (
-        np.divide(r3d[:, 1], r3d[:, 2]) * resolution_scale + image_center[1]
-    )  # offset
+    r3d[:, 0] = np.divide(r3d[:, 0], r3d[:, 2]) + image_center[0]  # offset
+    r3d[:, 1] = np.divide(r3d[:, 1], r3d[:, 2]) + image_center[1]  # offset
     r2d = r3d[:, :2]
 
     return r2d
