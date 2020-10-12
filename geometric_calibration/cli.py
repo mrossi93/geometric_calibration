@@ -112,6 +112,12 @@ def save_cli(path, results, mode):
     default=1000,
 )
 @click.option(
+    "--debug_level",
+    type=click.INT,
+    help="Just for debug purposes. It can be 0, 1 or 2",
+    default=0,
+)
+@click.option(
     "--ref",
     "-r",
     type=click.Path(exists=True, file_okay=True, dir_okay=False),
@@ -119,7 +125,7 @@ def save_cli(path, results, mode):
     default=REF_BBS_DEFAULT_PATH,
 )
 @click_config_file.configuration_option()
-def main(mode, input_path, sad, sid, offset, drag_every, ref):
+def main(mode, input_path, sad, sid, offset, drag_every, debug_level, ref):
     """Console script for geometric_calibration.
 
     Author: Matteo Rossi"""
@@ -138,6 +144,9 @@ def main(mode, input_path, sad, sid, offset, drag_every, ref):
     if drag_every == 0:
         drag_every = 1000
 
+    if debug_level not in [0, 1, 2]:
+        debug_level = 0
+
     if mode == "cbct":
         calibration_results = calibrate_cbct(
             input_path,
@@ -146,14 +155,17 @@ def main(mode, input_path, sad, sid, offset, drag_every, ref):
             sid,
             center_offset=offset,
             drag_every=drag_every,
+            debug_level=debug_level,
         )
     elif mode == "2d":
-        calibration_results = calibrate_2d(input_path, bbs, sad, sid)
+        calibration_results = calibrate_2d(
+            input_path, bbs, sad, sid, debug_level
+        )
     else:
         click.echo("Mode '{}' not recognized.".format(mode))
         return 0
 
-    winsound.PlaySound("SystemExit", winsound.SND_ALIAS)
+    # winsound.PlaySound("SystemExit", winsound.SND_ALIAS)
 
     opt = "s"
     save_flag = False

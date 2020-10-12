@@ -141,7 +141,7 @@ def drag_and_drop_bbs(projection_path, bbs_projected, grayscale_range):
     # Drag&Drop
     pts = []
     for x, y in zip(bbs_projected[:, 0], bbs_projected[:, 1]):
-        point = patches.Circle((x, y), fc="r")
+        point = patches.Circle((x, y), fc="r", alpha=0.5)
         pts.append(point)
         ax.add_patch(point)
 
@@ -254,10 +254,17 @@ def search_bbs_centroids(
                 [np.nan, np.nan]
             )  # if out of the searching area
         """
+
+        def on_key_pressed(event):
+            if event.key == "enter":
+                plt.close()
+
         if debug_level == 2:
             hist, hist_centers = histogram(sub_img, nbins=100)
 
             fig, axes = plt.subplots(ncols=3, figsize=(8, 2.5))
+            fig.canvas.mpl_connect("key_press_event", on_key_pressed)
+
             ax = axes.ravel()
             ax[0] = plt.subplot(1, 3, 1)
             ax[1] = plt.subplot(1, 3, 2)
@@ -279,11 +286,7 @@ def search_bbs_centroids(
             ax[2].scatter(centroid[1], centroid[0], marker="*", c="g")
             ax[2].set_title("Thresholded")
 
-            plt.draw()
-            plt.waitforbuttonpress(0)
-            plt.close()
-
-            # plt.show()
+            plt.show()
 
     if len(bbs_centroid) == 0:
         raise Exception(
@@ -295,6 +298,9 @@ def search_bbs_centroids(
     if debug_level >= 1:
         bbs_dbg = bbs_centroid[~np.isnan(bbs_centroid).any(axis=1)]
         print(bbs_dbg)
+
+        fig = plt.figure()
+        fig.canvas.mpl_connect("key_press_event", on_key_pressed)
 
         plt.imshow(
             img, cmap="gray", vmin=grayscale_range[0], vmax=grayscale_range[1],

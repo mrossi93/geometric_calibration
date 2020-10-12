@@ -7,6 +7,7 @@ import numpy as np
 from scipy.optimize import least_squares
 import click
 import matplotlib.pyplot as plt
+from scipy.spatial.transform import Rotation as R
 
 from geometric_calibration.reader import (
     read_img_label_file,
@@ -15,8 +16,6 @@ from geometric_calibration.reader import (
 )
 
 from geometric_calibration.utils import (
-    deg2rad,
-    angle2rotm,
     get_grayscale_range,
     create_camera_matrix,
     project_camera_matrix,
@@ -26,7 +25,13 @@ from geometric_calibration.utils import (
 
 
 def calibrate_cbct(
-    projection_dir, bbs_3d, sad, sid, center_offset=0, drag_every=0
+    projection_dir,
+    bbs_3d,
+    sad,
+    sid,
+    center_offset=0,
+    drag_every=0,
+    debug_level=0,
 ):
     """Main CBCT Calibration routines.
 
@@ -110,7 +115,7 @@ def calibrate_cbct(
 
     # Calibrate views
     with click.progressbar(
-        iterable=range(len(angles)), fill_char="=", empty_char=" "
+        iterable=range(len(angles[:50])), fill_char="=", empty_char=" "
     ) as prog_bar:
         for k in prog_bar:
             proj_path = os.path.join(
@@ -132,6 +137,7 @@ def calibrate_cbct(
                     search_area=7,
                     image_center=None,
                     drag_and_drop=True,
+                    debug_level=debug_level,
                 )
             else:  # if not first iteration
                 # initialize geometry (based on previous optimization)
@@ -167,6 +173,7 @@ def calibrate_cbct(
                         search_area=7,
                         image_center=image_center,
                         drag_and_drop=True,
+                        debug_level=debug_level,
                     )
             # Update output dictionary
             results["proj_path"].append(proj_path)
@@ -188,7 +195,7 @@ def calibrate_cbct(
     return results
 
 
-def calibrate_2d(projection_dir, bbs_3d, sad, sid):
+def calibrate_2d(projection_dir, bbs_3d, sad, sid, debug_level=0):
     """Main 2D Calibration routines.
 
     :param projection_dir: path to directory containing .raw files
@@ -255,6 +262,7 @@ def calibrate_2d(projection_dir, bbs_3d, sad, sid):
                 pixel_size=[0.194, 0.194],
                 search_area=14,
                 drag_and_drop=True,
+                debug_level=debug_level,
             )
 
             # Update output dictionary
@@ -290,6 +298,7 @@ def calibrate_projection(
     search_area=7,
     image_center=None,
     drag_and_drop=True,
+    debug_level=0,
 ):
     """Calibration of a single projection.
 
@@ -340,8 +349,8 @@ def calibrate_projection(
     isocenter = [0, 0, 0]
 
     # panel orientation (from panel to brandis reference - rotation along y)
-    panel_orientation = np.array([0, deg2rad(angle), 0]) + np.array(
-        [0, deg2rad(angle_offset), 0]
+    panel_orientation = np.array([0, np.deg2rad(angle), 0]) + np.array(
+        [0, np.deg2rad(angle_offset), 0]
     )
 
     # Load projection
@@ -378,7 +387,7 @@ def calibrate_projection(
             search_area=search_area,
             dim_img=img_dim,
             grayscale_range=grayscale_range,
-            debug_level=0,
+            debug_level=debug_level,
         )
     else:
         bbs_centroid = search_bbs_centroids(
@@ -466,28 +475,28 @@ def calibrate_projection(
     err_final = np.mean(abs(err_final))
 
     # calculate new source/panel position
-    T_new = angle2rotm(
-        panel_orientation_new[0],
-        panel_orientation_new[1],
-        panel_orientation_new[2],
-    )
-    R_new = T_new[:3, :3]
+    R_new = R.from_euler("xyz", panel_orientation_new).as_matrix()
 
-    source_new = (isocenter_new + (R_new * np.array([0, 0, sad_new])))[:, 2]
-    panel_new = isocenter_new + (
-        R_new * np.array([0, 0, sad_new - sid_new])
-    )  # [:, 2]
+    R_new_plot = np.matmul(
+        R.from_euler("zyx", [90, 0, 0], degrees=True).as_matrix(), R_new
+    )  # only for plotting purposes
 
+    source_new = np.matmul(
+        R_new, np.array([0, 0, sad_new]).reshape([3, 1])
+    ).T  # source position (X-ray tube)
+    panel_center_new = np.matmul(
+        R_new, np.array([0, 0, sad_new - sid_new]).reshape([3, 1])
+    ).T  # panel position (center of panel)
+
+    dim_array = np.array([img_dim[0] / 2, img_dim[1] / 2, 1], ndmin=2)
+    pixel_array = np.array([pixel_size[0], pixel_size[1], 1], ndmin=2)
     panel_offset_new = (
-        np.array([0, 0, sad_new - sid_new])
-        - np.matmul(
-            (
-                np.array([img_dim[0] / 2, img_dim[1] / 2, 0])
-                * np.array([pixel_size[0], pixel_size[1], 1])
-            ).reshape([1, 3]),
-            R_new.T,
-        ).flatten()
-    )
+        dim_array * pixel_array
+    )  # offset in local coordinate system
+
+    panel_offset_new = panel_center_new - np.matmul(
+        panel_offset_new, R_new_plot
+    )  # referred to isocenter (impicitly we use inverse of R_new)
 
     # update with new value
     results["proj_angle"] = angle
@@ -495,11 +504,11 @@ def calibrate_projection(
     results["sid"] = sid_new
     results["sad"] = sad_new
     results["isocenter"] = isocenter_new
-    results["source"] = source_new
-    results["panel"] = panel_new
+    results["source"] = source_new.flatten()
+    results["panel"] = panel_center_new.flatten()
     results["img_center"] = image_center_new
-    results["panel_rot_matrix"] = R_new
-    results["panel_offset"] = panel_offset_new
+    results["panel_rot_matrix"] = R_new_plot
+    results["panel_offset"] = panel_offset_new.flatten()
     results["err_init"] = err_init
     results["err_final"] = err_final
 
@@ -733,13 +742,6 @@ def save_lut_planar(path, calib_results):
         elif "RL" in os.path.basename(proj_files[index]):
             rl_index = index
 
-    AP_panel_rot_matrix = calib_results["panel_rot_matrix"][ap_index].flatten(
-        "F"
-    )
-    RL_panel_rot_matrix = calib_results["panel_rot_matrix"][rl_index].flatten(
-        "F"
-    )
-
     config = configparser.ConfigParser()
     config["GENERAL_R2"] = {}
     config["AP_COUCH"] = {}
@@ -754,15 +756,15 @@ def save_lut_planar(path, calib_results):
     ap_couch["sp_0"] = str(calib_results["source"][ap_index][0])
     ap_couch["sp_1"] = str(calib_results["source"][ap_index][1])
     ap_couch["sp_2"] = str(calib_results["source"][ap_index][2])
-    ap_couch["A_0"] = str(AP_panel_rot_matrix[0])
-    ap_couch["A_1"] = str(AP_panel_rot_matrix[1])
-    ap_couch["A_2"] = str(AP_panel_rot_matrix[2])
-    ap_couch["A_3"] = str(AP_panel_rot_matrix[3])
-    ap_couch["A_4"] = str(AP_panel_rot_matrix[4])
-    ap_couch["A_5"] = str(AP_panel_rot_matrix[5])
-    ap_couch["A_6"] = str(AP_panel_rot_matrix[6])
-    ap_couch["A_7"] = str(AP_panel_rot_matrix[7])
-    ap_couch["A_8"] = str(AP_panel_rot_matrix[8])
+    ap_couch["A_0"] = str(calib_results["panel_rot_matrix"][ap_index][0][0])
+    ap_couch["A_1"] = str(calib_results["panel_rot_matrix"][ap_index][1][0])
+    ap_couch["A_2"] = str(calib_results["panel_rot_matrix"][ap_index][2][0])
+    ap_couch["A_3"] = str(calib_results["panel_rot_matrix"][ap_index][0][1])
+    ap_couch["A_4"] = str(calib_results["panel_rot_matrix"][ap_index][1][1])
+    ap_couch["A_5"] = str(calib_results["panel_rot_matrix"][ap_index][2][1])
+    ap_couch["A_6"] = str(calib_results["panel_rot_matrix"][ap_index][0][2])
+    ap_couch["A_7"] = str(calib_results["panel_rot_matrix"][ap_index][1][2])
+    ap_couch["A_8"] = str(calib_results["panel_rot_matrix"][ap_index][2][2])
     ap_couch["A_off_0"] = str(calib_results["panel_offset"][ap_index][0])
     ap_couch["A_off_1"] = str(calib_results["panel_offset"][ap_index][1])
     ap_couch["A_off_2"] = str(calib_results["panel_offset"][ap_index][2])
@@ -771,15 +773,15 @@ def save_lut_planar(path, calib_results):
     rl_couch["sp_0"] = str(calib_results["source"][rl_index][0])
     rl_couch["sp_1"] = str(calib_results["source"][rl_index][1])
     rl_couch["sp_2"] = str(calib_results["source"][rl_index][2])
-    rl_couch["A_0"] = str(RL_panel_rot_matrix[0])
-    rl_couch["A_1"] = str(RL_panel_rot_matrix[1])
-    rl_couch["A_2"] = str(RL_panel_rot_matrix[2])
-    rl_couch["A_3"] = str(RL_panel_rot_matrix[3])
-    rl_couch["A_4"] = str(RL_panel_rot_matrix[4])
-    rl_couch["A_5"] = str(RL_panel_rot_matrix[5])
-    rl_couch["A_6"] = str(RL_panel_rot_matrix[6])
-    rl_couch["A_7"] = str(RL_panel_rot_matrix[7])
-    rl_couch["A_8"] = str(RL_panel_rot_matrix[8])
+    rl_couch["A_0"] = str(calib_results["panel_rot_matrix"][rl_index][0][0])
+    rl_couch["A_1"] = str(calib_results["panel_rot_matrix"][rl_index][1][0])
+    rl_couch["A_2"] = str(calib_results["panel_rot_matrix"][rl_index][2][0])
+    rl_couch["A_3"] = str(calib_results["panel_rot_matrix"][rl_index][0][1])
+    rl_couch["A_4"] = str(calib_results["panel_rot_matrix"][rl_index][1][1])
+    rl_couch["A_5"] = str(calib_results["panel_rot_matrix"][rl_index][2][1])
+    rl_couch["A_6"] = str(calib_results["panel_rot_matrix"][rl_index][0][2])
+    rl_couch["A_7"] = str(calib_results["panel_rot_matrix"][rl_index][1][2])
+    rl_couch["A_8"] = str(calib_results["panel_rot_matrix"][rl_index][2][2])
     rl_couch["A_off_0"] = str(calib_results["panel_offset"][rl_index][0])
     rl_couch["A_off_1"] = str(calib_results["panel_offset"][rl_index][1])
     rl_couch["A_off_2"] = str(calib_results["panel_offset"][rl_index][2])

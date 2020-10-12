@@ -35,7 +35,7 @@ class IndexTracker(object):
             self.bbs[self.ind, :, 1],
             marker=".",
             c="r",
-            s=5,
+            s=10,
             alpha=0.5,
         )
         self.update()
