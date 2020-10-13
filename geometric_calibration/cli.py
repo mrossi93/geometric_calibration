@@ -75,7 +75,7 @@ def save_cli(path, results, mode):
         logging.info(f"New LUT saved with {style_string} style.")
     elif mode == "2d":
         save_lut_planar(path, results)
-        logging.info(f"Calibration file saved.")
+        logging.info("Calibration file saved.")
 
     return
 

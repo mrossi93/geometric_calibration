@@ -531,7 +531,7 @@ Please acquire again calibration phantom and then retry."""
         dim_array * pixel_array
     )  # offset in local coordinate system
 
-    panel_offset_new = panel_center_new + np.matmul(
+    panel_offset_new = panel_center_new - np.matmul(
         panel_offset_new, R_new_plot
     )  # referred to isocenter (impicitly we use inverse of R_new)
 

@@ -12,7 +12,7 @@ from skimage.measure import regionprops
 matplotlib.rcParams["toolbar"] = "None"
 
 
-class DraggablePoints:
+class DraggablePoints_original:
     """Draggable points on matplotlibe figure.
 
     Returns:
@@ -116,6 +116,139 @@ class DraggablePoints:
         return np.array([a.center for a in self.artists])
 
 
+class DraggablePoints:
+    """Draggable points on matplotlibe figure.
+
+    Returns:
+        DraggablePoints -- DraggablePoints object
+    """
+
+    def __init__(self, artists, tolerance=15):
+        for artist in artists:
+            artist.set_picker(tolerance)
+
+        self.artists = artists
+        self.final_coord = None
+
+        # assume all artists are in the same figure, otherwise selection
+        # is meaningless
+        self.fig = self.artists[0].figure
+        self.ax = self.artists[0].axes
+
+        self.fig.canvas.mpl_connect("button_press_event", self.on_press)
+        self.fig.canvas.mpl_connect("button_release_event", self.on_release)
+        self.fig.canvas.mpl_connect("motion_notify_event", self.on_motion)
+        self.fig.canvas.mpl_connect("key_press_event", self.on_key_pressed)
+        self.fig.canvas.mpl_connect("key_release_event", self.on_key_released)
+        self.fig.canvas.mpl_connect("close_event", self.on_close)
+
+        self.currently_dragging = False
+        self.fine_mode = False
+        self.selected_artist_index = None
+        self.offset = np.zeros((1, 2))
+        self.x0 = 0
+        self.y0 = 0
+
+        plt.title("Drag&Drop red points on the image.\nPress Enter to continue")
+        plt.show()
+
+    def on_press(self, event):
+        """Event Handler for mouse button pression.
+
+        Arguments:
+            event -- Event that triggers the method
+        """
+        # is the press over some artist
+        isonartist = False
+
+        check_index = 0
+        for artist in self.artists:
+            if artist.contains(event)[0]:
+                isonartist = artist
+                # Remeber the index of artist selected, it will be needed in
+                # case of fine tuning
+                self.selected_artist_index = check_index
+            check_index += 1
+
+        self.x0 = event.xdata
+        self.y0 = event.ydata
+
+        if isonartist and not self.fine_mode:
+            # start dragging the entire group
+            self.currently_dragging = True
+            artist_center = np.array([a.center for a in self.artists])
+            event_center = np.array([event.xdata, event.ydata])
+            self.offset = artist_center - event_center
+        elif isonartist and self.fine_mode:
+            # start dragging only selected element
+            self.currently_dragging = True
+            artist_center = np.array([isonartist.center])
+            event_center = np.array([event.xdata, event.ydata])
+            self.offset = artist_center - event_center
+
+    def on_release(self, event):
+        """Event Handler for mouse button release.
+
+        Arguments:
+            event -- Event that triggers the method
+        """
+        if self.currently_dragging:
+            self.currently_dragging = False
+
+    def on_motion(self, event):
+        """Event Handler for mouse movement during dragging of points.
+
+        Arguments:
+            event -- Event that triggers the method
+        """
+
+        if self.currently_dragging and not self.fine_mode:
+            # Update the entire group
+            try:
+                newcenters = np.array([event.xdata, event.ydata]) + self.offset
+                for i, artist in enumerate(self.artists):
+                    artist.center = newcenters[i]
+            except Exception:
+                pass
+            self.fig.canvas.draw_idle()
+        elif self.currently_dragging and self.fine_mode:
+            # Update only selected artist
+            newcenter = np.array([event.xdata, event.ydata]) + self.offset
+            self.artists[self.selected_artist_index].center = newcenter[0][:]
+            self.fig.canvas.draw_idle()
+
+    def on_key_pressed(self, event):
+        """Event Handler for "enter" key pression.
+
+        Arguments:
+            event -- Event that triggers the method
+        """
+        if not self.currently_dragging and event.key == "enter":
+            plt.close()
+        if not self.currently_dragging and event.key == "control":
+            self.fine_mode = True
+
+    def on_key_released(self, event):
+        if self.fine_mode:
+            self.fine_mode = False
+
+    def on_close(self, event):
+        """Event Handler for closure of figure.
+
+        Arguments:
+            event -- Event that triggers the method
+        """
+        self.final_coord = self.get_coord()
+
+    def get_coord(self):
+        """Obtain current coordinates of points.
+
+        :return: An array nx2 containing coordinates for every point [x,y]
+        :rtype: numpy.array
+        """
+        return np.array([a.center for a in self.artists])
+
+
 def drag_and_drop_bbs(projection_path, bbs_projected, grayscale_range):
     """Drag&Drop Routines for bbs position's correction.
 
@@ -130,6 +263,43 @@ def drag_and_drop_bbs(projection_path, bbs_projected, grayscale_range):
     """
     # Overlay reference bbs with projection
     fig = plt.figure(num="Drag&Drop")
+
+    ax = fig.add_subplot(111)
+
+    # Reference image in background (must stay in position always)
+    ax.imshow(
+        projection_path,
+        cmap="gray",
+        vmin=grayscale_range[0],
+        vmax=grayscale_range[1],
+    )
+
+    # Drag&Drop
+    pts = []
+    for x, y in zip(bbs_projected[:, 0], bbs_projected[:, 1]):
+        point = patches.Circle((x, y), fc="r", alpha=0.5)
+        pts.append(point)
+        ax.add_patch(point)
+
+    r2d_corrected = DraggablePoints(pts)
+
+    return r2d_corrected.final_coord
+
+
+def fine_drag_and_drop_bbs(projection_path, bbs_projected, grayscale_range):
+    """Drag&Drop Routines for bbs position's correction.
+
+    :param projection_path: Path to the projection .raw file
+    :type projection_path: str
+    :param bbs_projected: Array nx2 with bbs yet projected
+    :type bbs_projected: numpy.array
+    :param grayscale_range: Grayscale range for current projection
+    :type grayscale_range: list
+    :return: Array nx2 containing the updated coordinates for bbs
+    :rtype: numpy.array
+    """
+    # Overlay reference bbs with projection
+    fig = plt.figure(num="Fine Drag&Drop")
 
     ax = fig.add_subplot(111)
 
