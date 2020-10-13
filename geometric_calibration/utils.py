@@ -82,9 +82,12 @@ class DraggablePoints:
         """
 
         if self.currently_dragging:
-            newcenters = np.array([event.xdata, event.ydata]) + self.offset
-            for i, artist in enumerate(self.artists):
-                artist.center = newcenters[i]
+            try:
+                newcenters = np.array([event.xdata, event.ydata]) + self.offset
+                for i, artist in enumerate(self.artists):
+                    artist.center = newcenters[i]
+            except Exception:
+                pass
             self.fig.canvas.draw_idle()
 
     def on_key_pressed(self, event):
@@ -208,7 +211,13 @@ def search_bbs_centroids(
         sub_img = adjust_image(sub_img, grayscale_range)
 
         # Binarize sub_image to extract the bbs
-        thresh = threshold_otsu(sub_img)
+        try:
+            thresh = threshold_otsu(sub_img)
+        except Exception:
+            # we are finished in a total white window, otsu thresholding needs
+            # at least two level of gray to work
+            bbs_centroid.append([np.nan, np.nan])
+            continue
         binary = sub_img > thresh
 
         # Count how many pixel belong to background vs foreground
@@ -227,39 +236,13 @@ def search_bbs_centroids(
 
         # Append centroid to bbs list
         bbs_centroid.append([min_row + centroid[1], min_col + centroid[0]])
-        """
-        ### ORIGINAL CODE
-        # Search for the bbs in the image (basically very low intensity
-        # surrounding by higher intensity pixel. ii,jj are the coordinates of
-        # the pixels that have an intensity that is lower than the lowest
-        # nominal intensity plus a tollerance.
-        ii, jj = np.where(
-            sub_img
-            < grayscale_range[0]
-            + 0.1 * (grayscale_range[1] - grayscale_range[0])
-        )  # based on intensity
-
-        if len(ii) == 0:
-            bbs_centroid.append([np.nan, np.nan])
-            continue
-
-        if (max(ii) - min(ii) < search_area) and (
-            max(jj) - min(jj) < search_area
-        ):  # based on coordinates
-            bbs_centroid.append(
-                [min_row + np.mean(jj) - 1, min_col + np.mean(ii) - 1]
-            )  # position of the centroid of the bbs
-        else:
-            bbs_centroid.append(
-                [np.nan, np.nan]
-            )  # if out of the searching area
-        """
 
         def on_key_pressed(event):
             if event.key == "enter":
                 plt.close()
 
         if debug_level == 2:
+            # Show every centroid found
             hist, hist_centers = histogram(sub_img, nbins=100)
 
             fig, axes = plt.subplots(ncols=3, figsize=(8, 2.5))
@@ -288,14 +271,10 @@ def search_bbs_centroids(
 
             plt.show()
 
-    if len(bbs_centroid) == 0:
-        raise Exception(
-            "Error! Try to better overlap reference with projection"
-        )
-
     bbs_centroid = np.array(bbs_centroid)
 
     if debug_level >= 1:
+        # Show final position for found cetroids
         bbs_dbg = bbs_centroid[~np.isnan(bbs_centroid).any(axis=1)]
         print(bbs_dbg)
 

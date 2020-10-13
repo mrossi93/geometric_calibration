@@ -2,6 +2,7 @@
 import sys
 import os
 import winsound
+import logging
 import click
 import click_config_file
 from geometric_calibration.reader import read_bbs_ref_file
@@ -26,8 +27,9 @@ else:
     APPLICATION_PATH = os.path.dirname(os.path.abspath(__file__))
 
 
-REF_BBS_DEFAULT_PATH = os.path.join(APPLICATION_PATH, "app_data")
-REF_BBS_DEFAULT_PATH = os.path.join(REF_BBS_DEFAULT_PATH, "ref_brandis.txt")
+REF_BBS_DEFAULT_PATH = os.path.join(
+    APPLICATION_PATH, "app_data", "ref_brandis.txt"
+)
 
 
 def save_cli(path, results, mode):
@@ -48,9 +50,9 @@ def save_cli(path, results, mode):
         ):
             for file in old_files:
                 os.remove(os.path.join(path, file))
-            click.echo("---\tOld LUT deleted\t---")
+            logging.info("---\tOld LUT deleted\t---")
 
-    # Se mode è CBCT allora prompt che chiede la modalità (default su classic)
+    # If mode is "cbct" then ask for lut style, classic mode is default
     if mode == "cbct":
         lut_style = click.prompt(
             """\nChoose a style:
@@ -63,15 +65,18 @@ def save_cli(path, results, mode):
         )
         if lut_style == "c":
             save_lut_classic_style(path, results)
+            style_string = "classic"
         elif lut_style == "n":
             save_lut_new_style(path, results)
+            style_string = "new"
         else:
             print("Invalid style")
             return
+        logging.info(f"New LUT saved with {style_string} style.")
     elif mode == "2d":
         save_lut_planar(path, results)
+        logging.info(f"Calibration file saved.")
 
-    click.echo("---\tNew LUT saved\t---")
     return
 
 
@@ -130,22 +135,46 @@ def main(mode, input_path, sad, sid, offset, drag_every, debug_level, ref):
 
     Author: Matteo Rossi"""
 
+    # set up logging to file
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)-8s] %(message)s",
+        datefmt="%d-%m-%y %H:%M:%S",
+        filename=os.path.join(input_path, "calibration_log.txt"),
+        # filemode="a",
+    )
+    # define a Handler which writes INFO messages or higher to the sys.stderr
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    # set a format which is simpler for console use
+    formatter = logging.Formatter("[%(levelname)-8s] %(message)s")
+    # tell the handler to use this format
+    console.setFormatter(formatter)
+    # add the handler to the root logger
+    logging.getLogger("").addHandler(console)
+
+    # Read reference file
     bbs = read_bbs_ref_file(ref)
 
-    click.echo("Calibration Parameters:")
-    click.echo("Mode: '{}'".format(mode))
-    click.echo("Input Path: '{}'".format(input_path))
-    click.echo("SAD: '{}'".format(sad))
-    click.echo("SID: '{}'".format(sid))
-    click.echo("Panel Offset: '{}'".format(offset))
-    click.echo("\nCalibrating the system. Please Wait...")
+    logging.info(
+        f"""Starting new calibration with the following parameters:
+    Mode: {mode}
+    Input Path: {input_path}
+    SAD: {sad}
+    SID: {sid}"""
+    )
 
     # Just to avoid division by zero, in case user wrongly set this parameter
     if drag_every == 0:
         drag_every = 1000
 
     if debug_level not in [0, 1, 2]:
+        logging.warning(
+            f"Debug Level {debug_level} doesn't exist. Calibration will be performed with debug level 0 as default."
+        )
         debug_level = 0
+    elif debug_level in [1, 2]:
+        logging.info(f"Debug mode activated with level {debug_level}")
 
     if mode == "cbct":
         calibration_results = calibrate_cbct(
@@ -162,8 +191,12 @@ def main(mode, input_path, sad, sid, offset, drag_every, debug_level, ref):
             input_path, bbs, sad, sid, debug_level
         )
     else:
-        click.echo("Mode '{}' not recognized.".format(mode))
+        logging.critical(
+            f"Mode {mode} not recognized. Please choose between '2d' or 'cbct'."
+        )
         return 0
+
+    logging.info("Calibration ended successfully.")
 
     # winsound.PlaySound("SystemExit", winsound.SND_ALIAS)
 

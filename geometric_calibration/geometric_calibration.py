@@ -1,6 +1,8 @@
 """Main module."""
 
 import os
+import logging
+import sys
 from datetime import datetime
 import configparser
 import numpy as np
@@ -52,15 +54,25 @@ def calibrate_cbct(
     # A: isocenter
 
     # Read image labels
-    labels_file_path = os.path.join(projection_dir, "imgLabels.txt")
-    proj_file, angles = read_img_label_file(labels_file_path)
+    logging.info("Reading imgLabels file...")
+    try:
+        labels_file_path = os.path.join(projection_dir, "imgLabels.txt")
+        proj_file, angles = read_img_label_file(labels_file_path)
+        proj_num_init = len(proj_file)
+    except Exception:
+        logging.error(
+            """File imgLabels.txt not found in current directory. Please check the path in configuration file."""
+        )
+        sys.exit(1)
+    logging.info("File imgLabels read.")
 
+    logging.info("Check files consistency...")
     # Check if files in imgLabels actually exist.
     files_to_remove = []
     angles_to_remove = []
     for f, angle in zip(proj_file, angles):
         if not (os.path.exists(os.path.join(projection_dir, f))):
-            print(f"File {f} not found. Skip it.")
+            logging.warning(f"File {f} not found. Skip it.")
             files_to_remove.append(f)
             angles_to_remove.append(angle)
 
@@ -84,7 +96,7 @@ def calibrate_cbct(
             )
 
         if np.count_nonzero(img) / (1024 * 768) <= 0.9:
-            print(f"File {f} is empty. Skip it.")
+            logging.warning(f"File {f} is empty. Skip it.")
             files_to_remove.append(f)
             angles_to_remove.append(angle)
 
@@ -92,6 +104,10 @@ def calibrate_cbct(
     for f, a in zip(files_to_remove, angles_to_remove):
         proj_file.remove(f)
         angles.remove(a)
+
+    logging.info(
+        f"Files concistency checked. Calibration will be performed on {len(proj_file)}/{proj_num_init} files."
+    )
 
     # proj_file.reverse()
     # angles.reverse()
@@ -113,16 +129,18 @@ def calibrate_cbct(
         "err_final": [],
     }
 
+    logging.info("Calibrating the system. Please Wait...")
     # Calibrate views
     with click.progressbar(
-        iterable=range(len(angles[:50])), fill_char="=", empty_char=" "
+        iterable=range(len(angles)), fill_char="=", empty_char=" "
     ) as prog_bar:
         for k in prog_bar:
-            proj_path = os.path.join(
-                projection_dir, proj_file[k]
-            )  # path of the current image
+            # path of the current image
+            proj_path = os.path.join(projection_dir, proj_file[k])
 
-            if k == 0:  # no indications other than nominal values
+            # For first projection, we have only the nominal values, so we need
+            # to manually correct bbs position with drag&drop
+            if k == 0:
                 # Calibrate first view with drag and drop procedure
                 view_results = calibrate_projection(
                     proj_path,
@@ -139,7 +157,9 @@ def calibrate_cbct(
                     drag_and_drop=True,
                     debug_level=debug_level,
                 )
-            else:  # if not first iteration
+            # For every other projection, we can simpy use the results of previous
+            # view as a starting point, avoiding drag&drop
+            else:
                 # initialize geometry (based on previous optimization)
                 angle_offset = angles[k] - angles[k - 1]
                 image_center = view_results["img_center"]
@@ -160,7 +180,8 @@ def calibrate_cbct(
                         drag_and_drop=False,
                     )
                 else:
-                    # Calibrate first view with drag and drop procedure
+                    # if "drag-every" parameter is setted, calibration for the current
+                    # view will be performed after drag&drop
                     view_results = calibrate_projection(
                         proj_path,
                         bbs_3d,
@@ -175,7 +196,8 @@ def calibrate_cbct(
                         drag_and_drop=True,
                         debug_level=debug_level,
                     )
-            # Update output dictionary
+
+            # Update output results dictionary
             results["proj_path"].append(proj_path)
             results["proj_angles"].append(view_results["proj_angle"])
             results["panel_orientation"].append(
@@ -224,6 +246,13 @@ def calibrate_2d(projection_dir, bbs_3d, sad, sid, debug_level=0):
             elif "RL" in f:
                 angles.append(0)
 
+    if len(proj_file) == 0:
+        logging.error(
+            """AP and RL projection not found.
+Please check input_path parameter in configuration file."""
+        )
+        sys.exit(1)
+
     # Initialize output dictionary
     results = {
         "proj_path": [],
@@ -241,6 +270,7 @@ def calibrate_2d(projection_dir, bbs_3d, sad, sid, debug_level=0):
         "err_final": [],
     }
 
+    logging.info("Calibrating the system. Please Wait...")
     # Calibrate views
     with click.progressbar(
         iterable=range(len(angles)), fill_char="=", empty_char=" ",
@@ -454,9 +484,16 @@ def calibrate_projection(
         sad_new = sol[6]
         isocenter_new = isocenter
     else:
-        raise Exception(
-            f"Cannot properly process projection at angle {angle}. Please Retry"
+        logging.error(
+            f"""Cannot properly process projection at angle {angle}.
+Please acquire again calibration phantom and then retry."""
         )
+        sys.exit(1)
+        # raise Exception(
+        #    f"""Cannot properly process projection at angle {angle}. Please Retry.
+        # Tip: Try to better overlap reference with projection"""
+        # )
+
     # project based on calibration - use new panel orientation,
     # tube and panel position
     T = create_camera_matrix(
@@ -494,7 +531,7 @@ def calibrate_projection(
         dim_array * pixel_array
     )  # offset in local coordinate system
 
-    panel_offset_new = panel_center_new - np.matmul(
+    panel_offset_new = panel_center_new + np.matmul(
         panel_offset_new, R_new_plot
     )  # referred to isocenter (impicitly we use inverse of R_new)
 
