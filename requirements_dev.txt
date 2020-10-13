@@ -21,7 +21,6 @@ docutils==0.16
 filelock==3.0.12
 flake8==3.8.3
 future==0.18.2
--e git+https://github.com/mrossi93/geometric_calibration.git@5e67cdfed5dec3bbeb6149cd2f8026149c353744#egg=geometric_calibration
 idna==2.10
 imageio==2.9.0
 imagesize==1.2.0
@@ -55,8 +54,6 @@ pytest-runner==5.2
 python-dateutil==2.8.1
 pytz==2020.1
 PyWavelets==1.1.1
-pywin32==228
-pywin32-ctypes==0.2.0
 readme-renderer==26.0
 regex==2020.7.14
 requests==2.24.0
