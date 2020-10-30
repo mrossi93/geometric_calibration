@@ -1,7 +1,6 @@
 """Console script for geometric_calibration."""
 import sys
 import os
-import winsound
 import logging
 import click
 import click_config_file
@@ -50,7 +49,7 @@ def save_cli(path, results, mode):
         ):
             for file in old_files:
                 os.remove(os.path.join(path, file))
-            logging.info("---\tOld LUT deleted\t---")
+            logging.info("Old LUT deleted")
 
     # If mode is "cbct" then ask for lut style, classic mode is default
     if mode == "cbct":
@@ -197,8 +196,6 @@ def main(mode, input_path, sad, sid, offset, drag_every, debug_level, ref):
         return 0
 
     logging.info("Calibration ended successfully.")
-
-    # winsound.PlaySound("SystemExit", winsound.SND_ALIAS)
 
     opt = "s"
     save_flag = False

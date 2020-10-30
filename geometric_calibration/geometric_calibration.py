@@ -130,9 +130,10 @@ def calibrate_cbct(
     }
 
     logging.info("Calibrating the system. Please Wait...")
+
     # Calibrate views
     with click.progressbar(
-        iterable=range(len(angles)), fill_char="=", empty_char=" "
+        iterable=range(len(angles)), fill_char="=", empty_char=" ",
     ) as prog_bar:
         for k in prog_bar:
             # path of the current image
@@ -242,9 +243,9 @@ def calibrate_2d(projection_dir, bbs_3d, sad, sid, debug_level=0):
         if ("AP" or "RL") and (".raw" or ".hnc") in f:
             proj_file.append(f)
             if "AP" in f:
-                angles.append(-90)
-            elif "RL" in f:
                 angles.append(0)
+            elif "RL" in f:
+                angles.append(90)
 
     if len(proj_file) == 0:
         logging.error(
@@ -287,7 +288,7 @@ Please check input_path parameter in configuration file."""
                 sad=sad,
                 sid=sid,
                 angle=angles[k],
-                angle_offset=90,  # 90 sim room, 0 room 2
+                angle_offset=0,
                 img_dim=[2048, 1536],
                 pixel_size=[0.194, 0.194],
                 search_area=14,
@@ -379,9 +380,10 @@ def calibrate_projection(
     isocenter = [0, 0, 0]
 
     # panel orientation (from panel to brandis reference - rotation along y)
-    panel_orientation = np.array([0, np.deg2rad(angle), 0]) + np.array(
-        [0, np.deg2rad(angle_offset), 0]
-    )
+    # Notation "zxy" to avoid gimbal lock on y=90
+    panel_orientation = np.array([0, 0, np.deg2rad(angle)])
+    angle_offset_array = np.array([0, 0, np.deg2rad(angle_offset)])
+    panel_orientation = panel_orientation + angle_offset_array
 
     # Load projection
     if ".raw" in projection_file:
@@ -402,9 +404,7 @@ def calibrate_projection(
     if drag_and_drop is True:
         # Overlay reference bbs with projection
         r2d_corrected = drag_and_drop_bbs(
-            projection_path=img,
-            bbs_projected=r2d,
-            grayscale_range=grayscale_range,
+            projection=img, bbs_projected=r2d, grayscale_range=grayscale_range,
         )
 
     # Starting from the updated coordinates, define a search area around them
@@ -446,11 +446,11 @@ def calibrate_projection(
 
     # Boundaries
     angle_limit = 0.1
-    sid_sad_limit = 2
+    sid_sad_limit = 3
     low_bound = [
         -angle_limit,
-        -np.pi,
         -angle_limit,
+        -np.pi,
         0,
         0,
         sid - sid_sad_limit,
@@ -458,8 +458,8 @@ def calibrate_projection(
     ]
     up_bound = [
         angle_limit,
-        np.pi,
         angle_limit,
+        np.pi,
         img_dim[1],
         img_dim[0],
         sid + sid_sad_limit,
@@ -478,8 +478,12 @@ def calibrate_projection(
 
         sol = sol.x  # Solution found
 
-        panel_orientation_new = np.array(sol[:3])  # New panel orientation
-        image_center_new = np.array(sol[3:5])  # New center of image
+        # New panel orientation ("ZXY" convention)
+        panel_orientation_new = np.array(sol[:3])
+
+        # New center of image
+        image_center_new = np.array(sol[3:5])
+
         sid_new = sol[5]
         sad_new = sol[6]
         isocenter_new = isocenter
@@ -511,29 +515,49 @@ Please acquire again calibration phantom and then retry."""
     err_init = np.mean(abs(err_init))
     err_final = np.mean(abs(err_final))
 
+    # ## TEST
     # calculate new source/panel position
-    R_new = R.from_euler("xyz", panel_orientation_new).as_matrix()
+    temp_panel_orientation = np.array(
+        [
+            panel_orientation_new[1],
+            panel_orientation_new[2],
+            panel_orientation_new[0],
+        ]
+    )
+    R_new = R.from_euler("xyz", temp_panel_orientation).as_matrix()
 
-    R_new_plot = np.matmul(
-        R.from_euler("zyx", [90, 0, 0], degrees=True).as_matrix(), R_new
-    )  # only for plotting purposes
+    # Referred to isocenter
+    R_new = np.matmul(
+        R_new.T, R.from_euler("xyz", [0, 0, -90], degrees=True).as_matrix()
+    )
 
-    source_new = np.matmul(
-        R_new, np.array([0, 0, sad_new]).reshape([3, 1])
-    ).T  # source position (X-ray tube)
+    # ## FINE TEST
+    """
+    # calculate new source/panel position
+    R_new = R.from_euler("zxy", panel_orientation_new).as_matrix()
+
+    # Referred to isocenter
+    R_new = np.matmul(
+        R_new.T, R.from_euler("zxy", [-90, 0, 0], degrees=True).as_matrix()
+    )
+    """
+
+    # source position (X-ray tube)
+    source_new = np.matmul(R_new, np.array([[0], [0], [sad_new]]))
+
+    # panel position (center of panel)
     panel_center_new = np.matmul(
-        R_new, np.array([0, 0, sad_new - sid_new]).reshape([3, 1])
-    ).T  # panel position (center of panel)
+        R_new, np.array([[0], [0], [sad_new - sid_new]])
+    )
 
-    dim_array = np.array([img_dim[0] / 2, img_dim[1] / 2, 1], ndmin=2)
+    dim_array = np.array([img_dim[0] / 2, img_dim[1] / 2, 0], ndmin=2)
     pixel_array = np.array([pixel_size[0], pixel_size[1], 1], ndmin=2)
-    panel_offset_new = (
-        dim_array * pixel_array
-    )  # offset in local coordinate system
 
-    panel_offset_new = panel_center_new - np.matmul(
-        panel_offset_new, R_new_plot
-    )  # referred to isocenter (impicitly we use inverse of R_new)
+    # offset in local coordinate system
+    panel_offset_new = dim_array * pixel_array
+
+    # referred to isocenter
+    panel_offset_new = panel_center_new - np.matmul(R_new, panel_offset_new.T)
 
     # update with new value
     results["proj_angle"] = angle
@@ -544,7 +568,7 @@ Please acquire again calibration phantom and then retry."""
     results["source"] = source_new.flatten()
     results["panel"] = panel_center_new.flatten()
     results["img_center"] = image_center_new
-    results["panel_rot_matrix"] = R_new_plot
+    results["panel_rot_matrix"] = R_new
     results["panel_offset"] = panel_offset_new.flatten()
     results["err_init"] = err_init
     results["err_final"] = err_final
@@ -598,6 +622,7 @@ def plot_calibration_results(calib_results):
     """
     source_pos = np.array(calib_results["source"])
     panel_pos = np.array(calib_results["panel"])
+    # panel_pos = np.array(calib_results["panel_offset"])
     isocenter = np.array(calib_results["isocenter"])
 
     def on_key_pressed(event):
@@ -694,9 +719,9 @@ def save_lut_new_style(path, calib_results):
             res_file.write(
                 "{:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f}\n".format(
                     angles[k],
-                    panel_orientation[k][0],
                     panel_orientation[k][1],
                     panel_orientation[k][2],
+                    panel_orientation[k][0],
                     image_center[k][0],
                     image_center[k][1],
                     sid[k],
@@ -756,9 +781,9 @@ def save_lut_classic_style(path, calib_results):
             res_file.write(
                 "{:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f}\n".format(
                     angles[k],
-                    panel_orientation[k][0],
                     panel_orientation[k][1],
                     panel_orientation[k][2],
+                    panel_orientation[k][0],
                     image_center[k][0],
                     image_center[k][1],
                 )

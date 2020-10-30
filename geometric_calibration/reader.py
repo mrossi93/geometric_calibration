@@ -2,6 +2,7 @@
 import os
 import numpy as np
 from geometric_calibration.utils import angle2rotm, deg2rad
+from scipy.spatial.transform import Rotation as R
 
 
 def read_bbs_ref_file(filename):
@@ -19,10 +20,13 @@ def read_bbs_ref_file(filename):
 
     # spiral distribution visible on x-z plane
     # rotation along x about 90
-    T_map = angle2rotm(deg2rad(90), deg2rad(0), deg2rad(0))
-    bbs = np.append(bbs, np.ones((bbs.shape[0], 1)), axis=1)  # homogeneous
+    T_map = np.zeros([4, 4])
+    T_map[:3, :3] = R.from_euler("x", 90, degrees=True).as_matrix()
+    T_map[3, 3] = 1
+
+    bbs = np.append(bbs, np.ones((bbs.shape[0], 1)), axis=1)  # Homogeneous
     bbs = np.matmul(T_map, bbs.T).T
-    bbs = bbs[:, 0:3]  # back to not homogeneous
+    bbs = bbs[:, 0:3]  # Back to not homogeneous
 
     return bbs
 

@@ -9,111 +9,9 @@ from skimage.exposure import histogram
 from skimage.filters import threshold_otsu
 from skimage.measure import regionprops
 
+from scipy.spatial.transform import Rotation as R
+
 matplotlib.rcParams["toolbar"] = "None"
-
-
-class DraggablePoints_original:
-    """Draggable points on matplotlibe figure.
-
-    Returns:
-        DraggablePoints -- DraggablePoints object
-    """
-
-    def __init__(self, artists, tolerance=15):
-        for artist in artists:
-            artist.set_picker(tolerance)
-
-        self.artists = artists
-        self.final_coord = None
-
-        # assume all artists are in the same figure, otherwise selection
-        # is meaningless
-        self.fig = self.artists[0].figure
-        self.ax = self.artists[0].axes
-
-        self.fig.canvas.mpl_connect("button_press_event", self.on_press)
-        self.fig.canvas.mpl_connect("button_release_event", self.on_release)
-        self.fig.canvas.mpl_connect("motion_notify_event", self.on_motion)
-        self.fig.canvas.mpl_connect("key_press_event", self.on_key_pressed)
-        self.fig.canvas.mpl_connect("close_event", self.on_close)
-
-        self.currently_dragging = False
-        self.offset = np.zeros((1, 2))
-        self.x0 = 0
-        self.y0 = 0
-
-        plt.title("Drag&Drop red points on the image.\nPress Enter to continue")
-        plt.show()
-
-    def on_press(self, event):
-        """Event Handler for mouse button pression.
-
-        Arguments:
-            event -- Event that triggers the method
-        """
-        # is the press over some artist
-        isonartist = False
-        for artist in self.artists:
-            if artist.contains(event)[0]:
-                isonartist = artist
-        self.x0 = event.xdata
-        self.y0 = event.ydata
-        if isonartist:
-            # start dragging
-            self.currently_dragging = True
-            artist_center = np.array([a.center for a in self.artists])
-            event_center = np.array([event.xdata, event.ydata])
-            self.offset = artist_center - event_center
-
-    def on_release(self, event):
-        """Event Handler for mouse button release.
-
-        Arguments:
-            event -- Event that triggers the method
-        """
-        if self.currently_dragging:
-            self.currently_dragging = False
-
-    def on_motion(self, event):
-        """Event Handler for mouse movement during dragging of points.
-
-        Arguments:
-            event -- Event that triggers the method
-        """
-
-        if self.currently_dragging:
-            try:
-                newcenters = np.array([event.xdata, event.ydata]) + self.offset
-                for i, artist in enumerate(self.artists):
-                    artist.center = newcenters[i]
-            except Exception:
-                pass
-            self.fig.canvas.draw_idle()
-
-    def on_key_pressed(self, event):
-        """Event Handler for "enter" key pression.
-
-        Arguments:
-            event -- Event that triggers the method
-        """
-        if not self.currently_dragging and event.key == "enter":
-            plt.close()
-
-    def on_close(self, event):
-        """Event Handler for closure of figure.
-
-        Arguments:
-            event -- Event that triggers the method
-        """
-        self.final_coord = self.get_coord()
-
-    def get_coord(self):
-        """Obtain current coordinates of points.
-
-        :return: An array nx2 containing coordinates for every point [x,y]
-        :rtype: numpy.array
-        """
-        return np.array([a.center for a in self.artists])
 
 
 class DraggablePoints:
@@ -249,7 +147,7 @@ class DraggablePoints:
         return np.array([a.center for a in self.artists])
 
 
-def drag_and_drop_bbs(projection_path, bbs_projected, grayscale_range):
+def drag_and_drop_bbs(projection, bbs_projected, grayscale_range):
     """Drag&Drop Routines for bbs position's correction.
 
     :param projection_path: Path to the projection .raw file
@@ -268,44 +166,7 @@ def drag_and_drop_bbs(projection_path, bbs_projected, grayscale_range):
 
     # Reference image in background (must stay in position always)
     ax.imshow(
-        projection_path,
-        cmap="gray",
-        vmin=grayscale_range[0],
-        vmax=grayscale_range[1],
-    )
-
-    # Drag&Drop
-    pts = []
-    for x, y in zip(bbs_projected[:, 0], bbs_projected[:, 1]):
-        point = patches.Circle((x, y), fc="r", alpha=0.5)
-        pts.append(point)
-        ax.add_patch(point)
-
-    r2d_corrected = DraggablePoints(pts)
-
-    return r2d_corrected.final_coord
-
-
-def fine_drag_and_drop_bbs(projection_path, bbs_projected, grayscale_range):
-    """Drag&Drop Routines for bbs position's correction.
-
-    :param projection_path: Path to the projection .raw file
-    :type projection_path: str
-    :param bbs_projected: Array nx2 with bbs yet projected
-    :type bbs_projected: numpy.array
-    :param grayscale_range: Grayscale range for current projection
-    :type grayscale_range: list
-    :return: Array nx2 containing the updated coordinates for bbs
-    :rtype: numpy.array
-    """
-    # Overlay reference bbs with projection
-    fig = plt.figure(num="Fine Drag&Drop")
-
-    ax = fig.add_subplot(111)
-
-    # Reference image in background (must stay in position always)
-    ax.imshow(
-        projection_path,
+        projection,
         cmap="gray",
         vmin=grayscale_range[0],
         vmax=grayscale_range[1],
@@ -511,8 +372,8 @@ def angle2rotm(rot_x, rot_y, rot_z):
         ]
     )
 
-    R = np.matmul(Rz, np.matmul(Ry, Rx))
-    trans = R
+    rot = np.matmul(Rz, np.matmul(Ry, Rx))
+    trans = rot
     trans = np.append(trans, np.zeros((3, 1)), axis=1)
     trans = np.append(trans, np.zeros((1, 4)), axis=0)
     trans[3, 3] = 1.0
@@ -563,14 +424,20 @@ def create_camera_matrix(panel_orientation, sid, sad, pixel_size, isocenter):
     :return: 3x4 Camera Matrix
     :rtype: numpy.array
     """
-    # extrinsic parameters
-    extrinsic = angle2rotm(
-        panel_orientation[0], panel_orientation[1], panel_orientation[2],
-    )
-    extrinsic[:3, :3] = extrinsic[:3, :3].T
+    # References:
+    # - http://ksimek.github.io/2012/08/14/decompose/
+    # - http://ksimek.github.io/2012/08/22/extrinsic
 
-    # add isocenter projection in extrinsic matrix
-    extrinsic[:3, 3] = np.dot(extrinsic[:3, :3], isocenter)
+    # extrinsic parameters (in homogeneous form)
+    extrinsic = np.zeros([4, 4])
+    extrinsic[3, 3] = 1
+
+    rot = R.from_euler("zxy", panel_orientation).as_matrix().T
+    C = np.array(isocenter)
+    transl = -np.matmul(rot, C)
+
+    extrinsic[:3, :3] = rot[:]
+    extrinsic[:3, 3] = transl
     extrinsic[2, 3] = extrinsic[2, 3] + sad  # add sad
 
     # intrinsic parameters
@@ -579,10 +446,10 @@ def create_camera_matrix(panel_orientation, sid, sad, pixel_size, isocenter):
     intrinsic[1, 1] = sid / pixel_size[0]
     intrinsic[2, 2] = 1
 
-    # total matrix
-    T = np.matmul(intrinsic, extrinsic)
+    # total camera matrix
+    camera_matrix = np.matmul(intrinsic, extrinsic)
 
-    return T
+    return camera_matrix
 
 
 def get_grayscale_range(img):
@@ -597,7 +464,7 @@ def get_grayscale_range(img):
     :rtype: list
     """
     # image range - lowest and highest gray-level intensity for projection
-    grayscale_range = [np.amin(img), np.amax(img) / 10]
+    grayscale_range = [np.amin(img), np.amax(img) / 3]
     return grayscale_range
 
 
