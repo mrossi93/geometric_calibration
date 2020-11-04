@@ -68,7 +68,7 @@ def read_projection_raw(filename, dim):
     :rtype: numpy.array
     """
     image = np.fromfile(filename, dtype="uint16", sep="")
-    image = np.reshape(image, newshape=[dim[1], dim[0]]).T
+    image = np.reshape(image, newshape=[dim[0], dim[1]]).T
     return image
 
 
@@ -88,6 +88,6 @@ def read_projection_hnc(filename, dim):
         image = np.frombuffer(f.read(), dtype=np.uint16)
 
         # Change the shape of the array to the actual shape of the picture
-        image.shape = (dim[0], dim[1])
+        image.shape = (dim[1], dim[0])
 
     return image

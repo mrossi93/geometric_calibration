@@ -223,8 +223,8 @@ def search_bbs_centroids(
         if (
             (ind_row < 0)
             or (ind_col < 0)
-            or (ind_row > dim_img[1])
-            or (ind_col > dim_img[0])
+            or (ind_row > dim_img[0])
+            or (ind_col > dim_img[1])
         ):
             bbs_centroid.append([np.nan, np.nan])
             continue
@@ -232,8 +232,8 @@ def search_bbs_centroids(
         # define the field of research
         min_row = int(max([0, ind_row - search_area]))
         min_col = int(max([0, ind_col - search_area]))
-        max_row = int(min([ind_row + search_area, dim_img[1]]))
-        max_col = int(min([ind_col + search_area, dim_img[0]]))
+        max_row = int(min([ind_row + search_area, dim_img[0]]))
+        max_col = int(min([ind_col + search_area, dim_img[1]]))
 
         # define a mask on the original image to underline field of research
         sub_img = img[min_col:max_col, min_row:max_row]
@@ -442,8 +442,8 @@ def create_camera_matrix(panel_orientation, sdd, sid, pixel_size, isocenter):
 
     # intrinsic parameters
     intrinsic = np.zeros((3, 4))
-    intrinsic[0, 0] = sdd / pixel_size[1]
-    intrinsic[1, 1] = sdd / pixel_size[0]
+    intrinsic[0, 0] = sdd / pixel_size[0]
+    intrinsic[1, 1] = sdd / pixel_size[1]
     intrinsic[2, 2] = 1
 
     # total camera matrix
@@ -464,7 +464,7 @@ def get_grayscale_range(img):
     :rtype: list
     """
     # image range - lowest and highest gray-level intensity for projection
-    grayscale_range = [np.amin(img), np.amax(img) / 3]
+    grayscale_range = [np.amin(img), np.amax(img) / 10]
     return grayscale_range
 
 

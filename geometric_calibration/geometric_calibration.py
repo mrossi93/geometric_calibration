@@ -88,14 +88,14 @@ def calibrate_cbct(
     for f, angle in zip(proj_file, angles):
         if ".raw" in f:
             img = read_projection_raw(
-                os.path.join(projection_dir, f), [1024, 768]
+                os.path.join(projection_dir, f), [768, 1024]
             )
         elif ".hnc" in f:
             img = read_projection_hnc(
-                os.path.join(projection_dir, f), [1024, 768]
+                os.path.join(projection_dir, f), [768, 1024]
             )
 
-        if np.count_nonzero(img) / (1024 * 768) <= 0.9:
+        if np.count_nonzero(img) / (768 * 1024) <= 0.9:
             logging.warning(f"File {f} is empty. Skip it.")
             files_to_remove.append(f)
             angles_to_remove.append(angle)
@@ -108,9 +108,6 @@ def calibrate_cbct(
     logging.info(
         f"Files concistency checked. Calibration will be performed on {len(proj_file)}/{proj_num_init} files."
     )
-
-    # proj_file.reverse()
-    # angles.reverse()
 
     # Initialize output dictionary
     results = {
@@ -151,7 +148,7 @@ def calibrate_cbct(
                     angle=angles[k],
                     angle_offset=90,  # 90 for simulation room, 0 for room 2
                     center_offset=center_offset,
-                    img_dim=[1024, 768],
+                    img_dim=[768, 1024],
                     pixel_size=[0.388, 0.388],
                     search_area=7,
                     image_center=None,
@@ -174,7 +171,7 @@ def calibrate_cbct(
                         sdd=sdd,
                         angle=angles[k - 1],
                         angle_offset=90 + angle_offset,  # 90 sim room, 0 room 2
-                        img_dim=[1024, 768],
+                        img_dim=[768, 1024],
                         pixel_size=[0.388, 0.388],
                         search_area=7,
                         image_center=image_center,
@@ -190,7 +187,7 @@ def calibrate_cbct(
                         sdd=sdd,
                         angle=angles[k - 1],
                         angle_offset=90 + angle_offset,  # 90 sim room, 0 room 2
-                        img_dim=[1024, 768],
+                        img_dim=[768, 1024],
                         pixel_size=[0.388, 0.388],
                         search_area=7,
                         image_center=image_center,
@@ -289,7 +286,7 @@ Please check input_path parameter in configuration file."""
                 sdd=sdd,
                 angle=angles[k],
                 angle_offset=0,
-                img_dim=[2048, 1536],
+                img_dim=[1536, 2048],
                 pixel_size=[0.194, 0.194],
                 search_area=14,
                 drag_and_drop=True,
@@ -324,7 +321,7 @@ def calibrate_projection(
     angle,
     angle_offset=0,
     center_offset=0,
-    img_dim=[1024, 768],
+    img_dim=[768, 1024],
     pixel_size=[0.388, 0.388],
     search_area=7,
     image_center=None,
@@ -347,7 +344,7 @@ def calibrate_projection(
     :type angle_offset: int, optional
     :param center_offset: panel shift for half fan reconstruction, defaults to None
     :type center_offset: float, optional
-    :param img_dim: image dimensions in pixels, defaults to [1024, 768]
+    :param img_dim: image dimensions in pixels, defaults to [768, 1024]
     :type img_dim: list, optional
     :param pixel_size: pixel dimensions in mm, defaults to [0.388, 0.388]
     :type pixel_size: list, optional
@@ -375,7 +372,7 @@ def calibrate_projection(
 
     # center_offset is the shift of the panel in half fan mode
     if image_center is None:  # in case image_center is not declared
-        image_center = [img_dim[1] / 2 + center_offset, img_dim[0] / 2]
+        image_center = [img_dim[0] / 2 + center_offset, img_dim[1] / 2]
 
     isocenter = [0, 0, 0]
 

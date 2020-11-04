@@ -66,10 +66,10 @@ class IndexTracker(object):
 
 def slideshow(calibration_results, bbs_3d, mode):
     if mode == "cbct":
-        img_dim = [1024, 768]
+        img_dim = [768, 1024]
         pixel_size = [0.388, 0.388]
     elif mode == "2d":
-        img_dim = [2048, 1536]
+        img_dim = [1536, 2048]
         pixel_size = [0.194, 0.194]
 
     # Load projections
