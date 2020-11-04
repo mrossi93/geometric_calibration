@@ -57,7 +57,7 @@ def calibrate_cbct(
     logging.info("Reading imgLabels file...")
     try:
         labels_file_path = os.path.join(projection_dir, "imgLabels.txt")
-        proj_file, angles = read_img_label_file(labels_file_path)
+        proj_file, gantry_angles = read_img_label_file(labels_file_path)
         proj_num_init = len(proj_file)
     except Exception:
         logging.error(
@@ -70,22 +70,22 @@ def calibrate_cbct(
     # Check if files in imgLabels actually exist.
     files_to_remove = []
     angles_to_remove = []
-    for f, angle in zip(proj_file, angles):
+    for f, gantry_angle in zip(proj_file, gantry_angles):
         if not (os.path.exists(os.path.join(projection_dir, f))):
             logging.warning(f"File {f} not found. Skip it.")
             files_to_remove.append(f)
-            angles_to_remove.append(angle)
+            angles_to_remove.append(gantry_angle)
 
     # Remove files that don't exist
     for f, a in zip(files_to_remove, angles_to_remove):
         proj_file.remove(f)
-        angles.remove(a)
+        gantry_angles.remove(a)
 
     # Check if image is actually acquired, avoid to process all-black images
     files_to_remove = []
     angles_to_remove = []
 
-    for f, angle in zip(proj_file, angles):
+    for f, gantry_angle in zip(proj_file, gantry_angles):
         if ".raw" in f:
             img = read_projection_raw(
                 os.path.join(projection_dir, f), [768, 1024]
@@ -98,12 +98,12 @@ def calibrate_cbct(
         if np.count_nonzero(img) / (768 * 1024) <= 0.9:
             logging.warning(f"File {f} is empty. Skip it.")
             files_to_remove.append(f)
-            angles_to_remove.append(angle)
+            angles_to_remove.append(gantry_angle)
 
     # Remove all-black files
     for f, a in zip(files_to_remove, angles_to_remove):
         proj_file.remove(f)
-        angles.remove(a)
+        gantry_angles.remove(a)
 
     logging.info(
         f"Files concistency checked. Calibration will be performed on {len(proj_file)}/{proj_num_init} files."
@@ -112,15 +112,15 @@ def calibrate_cbct(
     # Initialize output dictionary
     results = {
         "proj_path": [],
-        "proj_angles": [],
-        "panel_orientation": [],
+        "gantry_angles": [],
+        "detector_orientation": [],
         "sdd": [],
         "sid": [],
         "isocenter": [],
         "source": [],
         "panel": [],
-        "img_center": [],
-        "panel_rot_matrix": [],
+        "image_center": [],
+        "detector_rot_matrix": [],
         "panel_offset": [],
         "err_init": [],
         "err_final": [],
@@ -130,7 +130,7 @@ def calibrate_cbct(
 
     # Calibrate views
     with click.progressbar(
-        iterable=range(len(angles)), fill_char="=", empty_char=" ",
+        iterable=range(len(gantry_angles[:10])), fill_char="=", empty_char=" ",
     ) as prog_bar:
         for k in prog_bar:
             # path of the current image
@@ -141,54 +141,56 @@ def calibrate_cbct(
             if k == 0:
                 # Calibrate first view with drag and drop procedure
                 view_results = calibrate_projection(
-                    proj_path,
-                    bbs_3d,
+                    projection_file=proj_path,
+                    bbs_3d=bbs_3d,
                     sid=sid,
                     sdd=sdd,
-                    angle=angles[k],
-                    angle_offset=90,  # 90 for simulation room, 0 for room 2
+                    gantry_angle=gantry_angles[k],
+                    gantry_angle_offset=90,  # 90 for simulation room, 0 for room 2
                     center_offset=center_offset,
-                    img_dim=[768, 1024],
-                    pixel_size=[0.388, 0.388],
+                    image_size=[768, 1024],
+                    pixel_spacing=[0.388, 0.388],
                     search_area=7,
                     image_center=None,
                     drag_and_drop=True,
                     debug_level=debug_level,
                 )
-            # For every other projection, we can simpy use the results of previous
-            # view as a starting point, avoiding drag&drop
+            # For every other projection, we can simpy use the results of
+            # previous view as a starting point, avoiding drag&drop
             else:
                 # initialize geometry (based on previous optimization)
-                angle_offset = angles[k] - angles[k - 1]
-                image_center = view_results["img_center"]
+                gantry_angle_offset = gantry_angles[k] - gantry_angles[k - 1]
+                image_center = view_results["image_center"]
 
                 if k % drag_every != 0:
                     # Calibrate other views without drag and drop procedure
                     view_results = calibrate_projection(
-                        proj_path,
-                        bbs_3d,
+                        projection_file=proj_path,
+                        bbs_3d=bbs_3d,
                         sid=sid,
                         sdd=sdd,
-                        angle=angles[k - 1],
-                        angle_offset=90 + angle_offset,  # 90 sim room, 0 room 2
-                        img_dim=[768, 1024],
-                        pixel_size=[0.388, 0.388],
+                        gantry_angle=gantry_angles[k - 1],
+                        gantry_angle_offset=90
+                        + gantry_angle_offset,  # 90 sim room, 0 room 2
+                        image_size=[768, 1024],
+                        pixel_spacing=[0.388, 0.388],
                         search_area=7,
                         image_center=image_center,
                         drag_and_drop=False,
                     )
                 else:
-                    # if "drag-every" parameter is setted, calibration for the current
-                    # view will be performed after drag&drop
+                    # if "drag-every" parameter is setted, calibration for the
+                    # current view will be performed after drag&drop
                     view_results = calibrate_projection(
-                        proj_path,
-                        bbs_3d,
+                        projection_file=proj_path,
+                        bbs_3d=bbs_3d,
                         sid=sid,
                         sdd=sdd,
-                        angle=angles[k - 1],
-                        angle_offset=90 + angle_offset,  # 90 sim room, 0 room 2
-                        img_dim=[768, 1024],
-                        pixel_size=[0.388, 0.388],
+                        gantry_angle=gantry_angles[k - 1],
+                        gantry_angle_offset=90
+                        + gantry_angle_offset,  # 90 sim room, 0 room 2
+                        image_size=[768, 1024],
+                        pixel_spacing=[0.388, 0.388],
                         search_area=7,
                         image_center=image_center,
                         drag_and_drop=True,
@@ -197,17 +199,19 @@ def calibrate_cbct(
 
             # Update output results dictionary
             results["proj_path"].append(proj_path)
-            results["proj_angles"].append(view_results["proj_angle"])
-            results["panel_orientation"].append(
-                view_results["panel_orientation"]
+            results["gantry_angles"].append(view_results["gantry_angle"])
+            results["detector_orientation"].append(
+                view_results["detector_orientation"]
             )
             results["sdd"].append(view_results["sdd"])
             results["sid"].append(view_results["sid"])
             results["isocenter"].append(view_results["isocenter"])
             results["source"].append(view_results["source"])
             results["panel"].append(view_results["panel"])
-            results["img_center"].append(view_results["img_center"])
-            results["panel_rot_matrix"].append(view_results["panel_rot_matrix"])
+            results["image_center"].append(view_results["image_center"])
+            results["detector_rot_matrix"].append(
+                view_results["detector_rot_matrix"]
+            )
             results["panel_offset"].append(view_results["panel_offset"])
             results["err_init"].append(view_results["err_init"])
             results["err_final"].append(view_results["err_final"])
@@ -234,15 +238,15 @@ def calibrate_2d(projection_dir, bbs_3d, sid, sdd, debug_level=0):
 
     # Find projection files in the current folder
     proj_file = []
-    angles = []
+    gantry_angles = []
 
     for f in os.listdir(projection_dir):
         if ("AP" or "RL") and (".raw" or ".hnc") in f:
             proj_file.append(f)
             if "AP" in f:
-                angles.append(0)
+                gantry_angles.append(0)
             elif "RL" in f:
-                angles.append(90)
+                gantry_angles.append(90)
 
     if len(proj_file) == 0:
         logging.error(
@@ -254,15 +258,15 @@ Please check input_path parameter in configuration file."""
     # Initialize output dictionary
     results = {
         "proj_path": [],
-        "proj_angles": [],
-        "panel_orientation": [],
+        "gantry_angles": [],
+        "detector_orientation": [],
         "sdd": [],
         "sid": [],
         "isocenter": [],
         "source": [],
         "panel": [],
-        "img_center": [],
-        "panel_rot_matrix": [],
+        "image_center": [],
+        "detector_rot_matrix": [],
         "panel_offset": [],
         "err_init": [],
         "err_final": [],
@@ -271,23 +275,22 @@ Please check input_path parameter in configuration file."""
     logging.info("Calibrating the system. Please Wait...")
     # Calibrate views
     with click.progressbar(
-        iterable=range(len(angles)), fill_char="=", empty_char=" ",
+        iterable=range(len(gantry_angles)), fill_char="=", empty_char=" ",
     ) as prog_bar:
         for k in prog_bar:
-            proj_path = os.path.join(
-                projection_dir, proj_file[k]
-            )  # path of the current image
+            # path of the current image
+            proj_path = os.path.join(projection_dir, proj_file[k])
 
             # Calibrate views with drag and drop procedure
             view_results = calibrate_projection(
-                proj_path,
-                bbs_3d,
+                projection_file=proj_path,
+                bbs_3d=bbs_3d,
                 sid=sid,
                 sdd=sdd,
-                angle=angles[k],
-                angle_offset=0,
-                img_dim=[1536, 2048],
-                pixel_size=[0.194, 0.194],
+                gantry_angle=gantry_angles[k],
+                gantry_angle_offset=0,
+                image_size=[1536, 2048],
+                pixel_spacing=[0.194, 0.194],
                 search_area=14,
                 drag_and_drop=True,
                 debug_level=debug_level,
@@ -295,17 +298,19 @@ Please check input_path parameter in configuration file."""
 
             # Update output dictionary
             results["proj_path"].append(proj_path)
-            results["proj_angles"].append(view_results["proj_angle"])
-            results["panel_orientation"].append(
-                view_results["panel_orientation"]
+            results["gantry_angles"].append(view_results["gantry_angle"])
+            results["detector_orientation"].append(
+                view_results["detector_orientation"]
             )
             results["sdd"].append(view_results["sdd"])
             results["sid"].append(view_results["sid"])
             results["isocenter"].append(view_results["isocenter"])
             results["source"].append(view_results["source"])
             results["panel"].append(view_results["panel"])
-            results["img_center"].append(view_results["img_center"])
-            results["panel_rot_matrix"].append(view_results["panel_rot_matrix"])
+            results["image_center"].append(view_results["image_center"])
+            results["detector_rot_matrix"].append(
+                view_results["detector_rot_matrix"]
+            )
             results["panel_offset"].append(view_results["panel_offset"])
             results["err_init"].append(view_results["err_init"])
             results["err_final"].append(view_results["err_final"])
@@ -318,11 +323,11 @@ def calibrate_projection(
     bbs_3d,
     sid,
     sdd,
-    angle,
-    angle_offset=0,
+    gantry_angle,
+    gantry_angle_offset=0,
     center_offset=0,
-    img_dim=[768, 1024],
-    pixel_size=[0.388, 0.388],
+    image_size=[768, 1024],
+    pixel_spacing=[0.388, 0.388],
     search_area=7,
     image_center=None,
     drag_and_drop=True,
@@ -372,36 +377,49 @@ def calibrate_projection(
 
     # center_offset is the shift of the panel in half fan mode
     if image_center is None:  # in case image_center is not declared
-        image_center = [img_dim[0] / 2 + center_offset, img_dim[1] / 2]
+        image_center = [image_size[0] / 2, image_size[1] / 2 + center_offset]
 
     isocenter = [0, 0, 0]
 
     # panel orientation (from panel to brandis reference - rotation along y)
     # Notation "zxy" to avoid gimbal lock on y=90
-    panel_orientation = np.array([0, 0, np.deg2rad(angle)])
-    angle_offset_array = np.array([0, 0, np.deg2rad(angle_offset)])
-    panel_orientation = panel_orientation + angle_offset_array
+    # out_of_plane_angle is rotation around x
+    # in_plane_angle is rotation around z
+    out_of_plane_angle = 0
+    in_plane_angle = 0
+    detector_orientation = np.deg2rad(
+        np.array(
+            [
+                in_plane_angle,
+                out_of_plane_angle,
+                (gantry_angle + gantry_angle_offset),
+            ]
+        )
+    )
 
     # Load projection
     if ".raw" in projection_file:
-        img = read_projection_raw(projection_file, img_dim)
+        img = read_projection_raw(projection_file, image_size)
     elif ".hnc" in projection_file:
-        img = read_projection_hnc(projection_file, img_dim)
+        img = read_projection_hnc(projection_file, image_size)
 
     # Project points starting from extrinsic and intrinsic parameters
     # generate proj_matrix (extrinsic and intrinsic parameters)
-    T = create_camera_matrix(panel_orientation, sdd, sid, pixel_size, isocenter)
+    proj_matrix = create_camera_matrix(
+        detector_orientation, sdd, sid, pixel_spacing, isocenter
+    )
     # projected coordinates of brandis on panel plane
-    r2d = project_camera_matrix(
-        bbs_3d, image_center, T
-    )  # 2d coordinates of reference points
+    # 2d coordinates of reference points
+    bbs_2d = project_camera_matrix(bbs_3d, proj_matrix, image_center)
 
     grayscale_range = get_grayscale_range(img)
 
     if drag_and_drop is True:
         # Overlay reference bbs with projection
-        r2d_corrected = drag_and_drop_bbs(
-            projection=img, bbs_projected=r2d, grayscale_range=grayscale_range,
+        bbs_2d_corrected = drag_and_drop_bbs(
+            projection=img,
+            bbs_projected=bbs_2d,
+            grayscale_range=grayscale_range,
         )
 
     # Starting from the updated coordinates, define a search area around them
@@ -410,83 +428,84 @@ def calibrate_projection(
     if drag_and_drop is True:
         bbs_centroid = search_bbs_centroids(
             img=img,
-            ref_2d=r2d_corrected,
+            ref_2d=bbs_2d_corrected,
             search_area=search_area,
-            dim_img=img_dim,
+            image_size=image_size,
             grayscale_range=grayscale_range,
             debug_level=debug_level,
         )
     else:
         bbs_centroid = search_bbs_centroids(
             img=img,
-            ref_2d=r2d,
+            ref_2d=bbs_2d,
             search_area=search_area,
-            dim_img=img_dim,
+            image_size=image_size,
             grayscale_range=grayscale_range,
         )
 
     # Calibration - non linear data fitting optimization problem
-    index = np.where(~np.isnan(bbs_centroid[:, 0]))[0]
+    good_bbs_index = np.where(~np.isnan(bbs_centroid[:, 0]))[0]
 
-    # Estimated BBs
-    bbs_estim_init = bbs_centroid[
-        ~np.isnan(bbs_centroid).any(axis=1)
-    ]  # not consider if out of searching area
-
+    # Estimated BBs - consider only good bbs
+    bbs_estim_init = bbs_centroid[~np.isnan(bbs_centroid).any(axis=1)]
     # Real Brandis BBs
-    bbs_real_init = bbs_3d[index, :]
+    bbs_real_init = bbs_3d[good_bbs_index, :]
 
-    # x0
-    parameters = np.append(panel_orientation, image_center).tolist()
+    # Initialization of parameters
+    parameters = np.append(detector_orientation, image_center).tolist()
     parameters.append(sdd)
     parameters.append(sid)
 
     # Boundaries
-    angle_limit = 0.1
-    sdd_sid_limit = 3
+    angle_limit = 0.1  # rad
+    distance_limit = 3  # mm
+    center_limit = 10  # pixel
     low_bound = [
         -angle_limit,
         -angle_limit,
-        -np.pi,
-        0,
-        0,
-        sdd - sdd_sid_limit,
-        sid - sdd_sid_limit,
+        detector_orientation[2] - angle_limit,
+        image_center[0] - center_limit,
+        image_center[1] - center_limit,
+        sdd - distance_limit,
+        sid - distance_limit,
     ]
     up_bound = [
         angle_limit,
         angle_limit,
-        np.pi,
-        img_dim[1],
-        img_dim[0],
-        sdd + sdd_sid_limit,
-        sid + sdd_sid_limit,
+        detector_orientation[2] + angle_limit,
+        image_center[0] + center_limit,
+        image_center[1] + center_limit,
+        sdd + distance_limit,
+        sid + distance_limit,
     ]
 
-    if index.shape[0] >= 5:  # at least 5 BBs
-        sol = least_squares(
+    if good_bbs_index.shape[0] >= 5:  # at least 5 BBs
+        solution = least_squares(
             fun=calibration_cost_function,
             x0=parameters,
-            args=(bbs_real_init, pixel_size, bbs_estim_init, isocenter),
+            args=(bbs_real_init, bbs_estim_init, pixel_spacing, isocenter),
             method="trf",
             bounds=(low_bound, up_bound),
             # verbose=2,
         )
 
-        sol = sol.x  # Solution found
+        # Solution found
+        solution = solution.x
 
-        # New panel orientation ("ZXY" convention)
-        panel_orientation_new = np.array(sol[:3])
+        # New detector orientation ("ZXY" convention)
+        detector_orientation_new = np.array(solution[:3])
 
         # New center of image
-        image_center_new = np.array(sol[3:5])
+        image_center_new = np.array(solution[3:5])
 
-        sdd_new = sol[5]
-        sid_new = sol[6]
+        sdd_new = solution[5]
+        sid_new = solution[6]
+
         isocenter_new = isocenter
+
     else:
         logging.error(
-            f"""Cannot properly process projection at angle {angle}.
+            f"""Cannot properly process projection at angle {gantry_angle}.
 Please acquire again calibration phantom and then retry."""
         )
         sys.exit(1)
@@ -495,49 +514,30 @@ Please acquire again calibration phantom and then retry."""
         # Tip: Try to better overlap reference with projection"""
         # )
 
-    # project based on calibration - use new panel orientation,
+    # Project points based on calibration - use new panel orientation,
     # tube and panel position
-    T = create_camera_matrix(
-        panel_orientation_new, sdd_new, sid_new, pixel_size, isocenter_new
-    )  # projected coordinates of brandis on panel plane
+    proj_matrix_new = create_camera_matrix(
+        detector_orientation_new, sdd_new, sid_new, pixel_spacing, isocenter_new
+    )
 
     bbs_estim_final = project_camera_matrix(
-        bbs_3d, image_center_new, T
-    )  # projected BBs (considering unknown)
+        bbs_3d, proj_matrix_new, image_center_new
+    )
 
-    # calculate improvement
-    err_init = bbs_estim_init - r2d[index, :]  # estimated - projected
-    err_final = bbs_estim_init - bbs_estim_final[index, :]
+    # calculate improvement: estimated - projected
+    err_init = bbs_estim_init - bbs_2d[good_bbs_index, :]
+    err_final = bbs_estim_init - bbs_estim_final[good_bbs_index, :]
 
     err_init = np.mean(abs(err_init))
     err_final = np.mean(abs(err_final))
 
-    # ## TEST
     # calculate new source/panel position
-    temp_panel_orientation = np.array(
-        [
-            panel_orientation_new[1],
-            panel_orientation_new[2],
-            panel_orientation_new[0],
-        ]
-    )
-    R_new = R.from_euler("xyz", temp_panel_orientation).as_matrix()
-
-    # Referred to isocenter
-    R_new = np.matmul(
-        R_new.T, R.from_euler("xyz", [0, 0, -90], degrees=True).as_matrix()
-    )
-
-    # ## FINE TEST
-    """
-    # calculate new source/panel position
-    R_new = R.from_euler("zxy", panel_orientation_new).as_matrix()
+    R_new = R.from_euler("zxy", detector_orientation_new).as_matrix()
 
     # Referred to isocenter
     R_new = np.matmul(
         R_new.T, R.from_euler("zxy", [-90, 0, 0], degrees=True).as_matrix()
     )
-    """
 
     # source position (X-ray tube)
     source_new = np.matmul(R_new, np.array([[0], [0], [sid_new]]))
@@ -547,8 +547,9 @@ Please acquire again calibration phantom and then retry."""
         R_new, np.array([[0], [0], [sid_new - sdd_new]])
     )
 
-    dim_array = np.array([img_dim[0] / 2, img_dim[1] / 2, 0], ndmin=2)
-    pixel_array = np.array([pixel_size[0], pixel_size[1], 1], ndmin=2)
+    # TODO: questo va rivisto
+    dim_array = np.array([image_size[0] / 2, image_size[1] / 2, 0], ndmin=2)
+    pixel_array = np.array([pixel_spacing[0], pixel_spacing[1], 1], ndmin=2)
 
     # offset in local coordinate system
     panel_offset_new = dim_array * pixel_array
@@ -557,15 +558,15 @@ Please acquire again calibration phantom and then retry."""
     panel_offset_new = panel_center_new - np.matmul(R_new, panel_offset_new.T)
 
     # update with new value
-    results["proj_angle"] = angle
-    results["panel_orientation"] = panel_orientation_new
+    results["gantry_angle"] = gantry_angle
+    results["detector_orientation"] = detector_orientation_new
     results["sdd"] = sdd_new
     results["sid"] = sid_new
     results["isocenter"] = isocenter_new
     results["source"] = source_new.flatten()
     results["panel"] = panel_center_new.flatten()
-    results["img_center"] = image_center_new
-    results["panel_rot_matrix"] = R_new
+    results["image_center"] = image_center_new
+    results["detector_rot_matrix"] = R_new
     results["panel_offset"] = panel_offset_new.flatten()
     results["err_init"] = err_init
     results["err_final"] = err_final
@@ -573,7 +574,7 @@ Please acquire again calibration phantom and then retry."""
     return results
 
 
-def calibration_cost_function(param, bbs_3d, pixel_size, bbs_2d, isocenter):
+def calibration_cost_function(param, bbs_3d, bbs_2d, pixel_size, isocenter):
     """Cost Function for calibration optimizers.
 
     :param param: parameters to be optimized
@@ -590,23 +591,19 @@ def calibration_cost_function(param, bbs_3d, pixel_size, bbs_2d, isocenter):
     :rtype: float
     """
     # unknown
-    panel_orientation = np.array(param[:3])
-    img_center = np.array(param[3:5])
+    detector_orientation = np.array(param[:3])
+    image_center = np.array(param[3:5])
     sdd = np.array(param[5])
     sid = np.array(param[6])
 
-    T = create_camera_matrix(
-        panel_orientation, sdd, sid, pixel_size, isocenter
-    )  # projected coordinates of brandis on panel plane
-    r2d = project_camera_matrix(
-        bbs_3d, img_center, T
-    )  # projected bbs (considering unknown)
+    proj_matrix = create_camera_matrix(
+        detector_orientation, sdd, sid, pixel_size, isocenter
+    )
+    r2d = project_camera_matrix(bbs_3d, proj_matrix, image_center)
 
     delta = r2d - bbs_2d  # Error
 
-    diff = np.square(delta[:, 0]) + np.square(
-        delta[:, 1]
-    )  # consider both directions
+    diff = np.sqrt(np.square(delta[:, 0]) + np.square(delta[:, 1]))
 
     return diff
 
@@ -675,9 +672,9 @@ def save_lut_new_style(path, calib_results):
     :param calib_results: dictionary containing results for a calibration
     :type calib_results: dict
     """
-    angles = calib_results["proj_angles"]
-    panel_orientation = calib_results["panel_orientation"]
-    image_center = calib_results["img_center"]
+    gantry_angles = calib_results["gantry_angles"]
+    detector_orientation = calib_results["detector_orientation"]
+    image_center = calib_results["image_center"]
     sdd = calib_results["sdd"]
     sid = calib_results["sid"]
 
@@ -696,7 +693,7 @@ def save_lut_new_style(path, calib_results):
     with open(output_file, "w") as res_file:
         res_file.write("#Look Up Table for CBCT reconstruction\n")
         res_file.write(
-            "#Angle (deg) | Panel Orientation(rad) [X  Y  Z] | Image_center(pixel) X Y | SDD(mm) | SID(mm)\n"
+            "#Angle (deg) | Panel Orientation (rad) [X  Y  Z] | Image_center (pixel) X Y | SDD (mm) | SID (mm)\n"
         )
         res_file.write(
             "#Date:{}_{}_{}_Time:{}_{}_{}.{}\n".format(
@@ -712,13 +709,13 @@ def save_lut_new_style(path, calib_results):
         res_file.write("#\n")
         res_file.write("# --> END OF HEADER. FIXED SIZE: 5 lines. \n")
 
-        for k in range(len(angles)):
+        for k in range(len(gantry_angles)):
             res_file.write(
                 "{:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f}\n".format(
-                    angles[k],
-                    panel_orientation[k][1],
-                    panel_orientation[k][2],
-                    panel_orientation[k][0],
+                    gantry_angles[k],
+                    detector_orientation[k][1],
+                    detector_orientation[k][2],
+                    detector_orientation[k][0],
                     image_center[k][0],
                     image_center[k][1],
                     sdd[k],
@@ -739,9 +736,9 @@ def save_lut_classic_style(path, calib_results):
     :param calib_results: dictionary containing results for a calibration
     :type calib_results: dict
     """
-    angles = calib_results["proj_angles"]
-    panel_orientation = calib_results["panel_orientation"]
-    image_center = calib_results["img_center"]
+    gantry_angles = calib_results["gantry_angles"]
+    detector_orientation = calib_results["detector_orientation"]
+    image_center = calib_results["image_center"]
 
     clock = datetime.now()
 
@@ -758,7 +755,7 @@ def save_lut_classic_style(path, calib_results):
     with open(output_file, "w") as res_file:
         res_file.write("#Look Up Table for CBCT reconstruction\n")
         res_file.write(
-            "#Angle (deg) | Panel Orientation(rad) [X  Y  Z] | Image_center(pixel) X Y\n"
+            "#Angle (deg) | Panel Orientation (rad) [X  Y  Z] | Image_center (pixel) X Y\n"
         )
         res_file.write(
             "#Date:{}_{}_{}_Time:{}_{}_{}.{}\n".format(
@@ -774,13 +771,13 @@ def save_lut_classic_style(path, calib_results):
         res_file.write("#\n")
         res_file.write("# --> END OF HEADER. FIXED SIZE: 5 lines. \n")
 
-        for k in range(len(angles)):
+        for k in range(len(gantry_angles)):
             res_file.write(
                 "{:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f} {:6.12f}\n".format(
-                    angles[k],
-                    panel_orientation[k][1],
-                    panel_orientation[k][2],
-                    panel_orientation[k][0],
+                    gantry_angles[k],
+                    detector_orientation[k][1],
+                    detector_orientation[k][2],
+                    detector_orientation[k][0],
                     image_center[k][0],
                     image_center[k][1],
                 )
@@ -815,15 +812,15 @@ def save_lut_planar(path, calib_results):
     ap_couch["sp_0"] = str(calib_results["source"][ap_index][0])
     ap_couch["sp_1"] = str(calib_results["source"][ap_index][1])
     ap_couch["sp_2"] = str(calib_results["source"][ap_index][2])
-    ap_couch["A_0"] = str(calib_results["panel_rot_matrix"][ap_index][0][0])
-    ap_couch["A_1"] = str(calib_results["panel_rot_matrix"][ap_index][1][0])
-    ap_couch["A_2"] = str(calib_results["panel_rot_matrix"][ap_index][2][0])
-    ap_couch["A_3"] = str(calib_results["panel_rot_matrix"][ap_index][0][1])
-    ap_couch["A_4"] = str(calib_results["panel_rot_matrix"][ap_index][1][1])
-    ap_couch["A_5"] = str(calib_results["panel_rot_matrix"][ap_index][2][1])
-    ap_couch["A_6"] = str(calib_results["panel_rot_matrix"][ap_index][0][2])
-    ap_couch["A_7"] = str(calib_results["panel_rot_matrix"][ap_index][1][2])
-    ap_couch["A_8"] = str(calib_results["panel_rot_matrix"][ap_index][2][2])
+    ap_couch["A_0"] = str(calib_results["detector_rot_matrix"][ap_index][0][0])
+    ap_couch["A_1"] = str(calib_results["detector_rot_matrix"][ap_index][1][0])
+    ap_couch["A_2"] = str(calib_results["detector_rot_matrix"][ap_index][2][0])
+    ap_couch["A_3"] = str(calib_results["detector_rot_matrix"][ap_index][0][1])
+    ap_couch["A_4"] = str(calib_results["detector_rot_matrix"][ap_index][1][1])
+    ap_couch["A_5"] = str(calib_results["detector_rot_matrix"][ap_index][2][1])
+    ap_couch["A_6"] = str(calib_results["detector_rot_matrix"][ap_index][0][2])
+    ap_couch["A_7"] = str(calib_results["detector_rot_matrix"][ap_index][1][2])
+    ap_couch["A_8"] = str(calib_results["detector_rot_matrix"][ap_index][2][2])
     ap_couch["A_off_0"] = str(calib_results["panel_offset"][ap_index][0])
     ap_couch["A_off_1"] = str(calib_results["panel_offset"][ap_index][1])
     ap_couch["A_off_2"] = str(calib_results["panel_offset"][ap_index][2])
@@ -832,15 +829,15 @@ def save_lut_planar(path, calib_results):
     rl_couch["sp_0"] = str(calib_results["source"][rl_index][0])
     rl_couch["sp_1"] = str(calib_results["source"][rl_index][1])
     rl_couch["sp_2"] = str(calib_results["source"][rl_index][2])
-    rl_couch["A_0"] = str(calib_results["panel_rot_matrix"][rl_index][0][0])
-    rl_couch["A_1"] = str(calib_results["panel_rot_matrix"][rl_index][1][0])
-    rl_couch["A_2"] = str(calib_results["panel_rot_matrix"][rl_index][2][0])
-    rl_couch["A_3"] = str(calib_results["panel_rot_matrix"][rl_index][0][1])
-    rl_couch["A_4"] = str(calib_results["panel_rot_matrix"][rl_index][1][1])
-    rl_couch["A_5"] = str(calib_results["panel_rot_matrix"][rl_index][2][1])
-    rl_couch["A_6"] = str(calib_results["panel_rot_matrix"][rl_index][0][2])
-    rl_couch["A_7"] = str(calib_results["panel_rot_matrix"][rl_index][1][2])
-    rl_couch["A_8"] = str(calib_results["panel_rot_matrix"][rl_index][2][2])
+    rl_couch["A_0"] = str(calib_results["detector_rot_matrix"][rl_index][0][0])
+    rl_couch["A_1"] = str(calib_results["detector_rot_matrix"][rl_index][1][0])
+    rl_couch["A_2"] = str(calib_results["detector_rot_matrix"][rl_index][2][0])
+    rl_couch["A_3"] = str(calib_results["detector_rot_matrix"][rl_index][0][1])
+    rl_couch["A_4"] = str(calib_results["detector_rot_matrix"][rl_index][1][1])
+    rl_couch["A_5"] = str(calib_results["detector_rot_matrix"][rl_index][2][1])
+    rl_couch["A_6"] = str(calib_results["detector_rot_matrix"][rl_index][0][2])
+    rl_couch["A_7"] = str(calib_results["detector_rot_matrix"][rl_index][1][2])
+    rl_couch["A_8"] = str(calib_results["detector_rot_matrix"][rl_index][2][2])
     rl_couch["A_off_0"] = str(calib_results["panel_offset"][rl_index][0])
     rl_couch["A_off_1"] = str(calib_results["panel_offset"][rl_index][1])
     rl_couch["A_off_2"] = str(calib_results["panel_offset"][rl_index][2])

@@ -185,7 +185,7 @@ def drag_and_drop_bbs(projection, bbs_projected, grayscale_range):
 
 
 def search_bbs_centroids(
-    img, ref_2d, search_area, dim_img, grayscale_range, debug_level=0
+    img, ref_2d, search_area, image_size, grayscale_range, debug_level=0
 ):
     """Search bbs based on projection.
 
@@ -223,8 +223,8 @@ def search_bbs_centroids(
         if (
             (ind_row < 0)
             or (ind_col < 0)
-            or (ind_row > dim_img[0])
-            or (ind_col > dim_img[1])
+            or (ind_row > image_size[0])
+            or (ind_col > image_size[1])
         ):
             bbs_centroid.append([np.nan, np.nan])
             continue
@@ -232,8 +232,8 @@ def search_bbs_centroids(
         # define the field of research
         min_row = int(max([0, ind_row - search_area]))
         min_col = int(max([0, ind_col - search_area]))
-        max_row = int(min([ind_row + search_area, dim_img[0]]))
-        max_col = int(min([ind_col + search_area, dim_img[1]]))
+        max_row = int(min([ind_row + search_area, image_size[0]]))
+        max_col = int(min([ind_col + search_area, image_size[1]]))
 
         # define a mask on the original image to underline field of research
         sub_img = img[min_col:max_col, min_row:max_row]
@@ -315,23 +315,12 @@ def search_bbs_centroids(
         plt.imshow(
             img, cmap="gray", vmin=grayscale_range[0], vmax=grayscale_range[1],
         )
-        plt.scatter(bbs_dbg[:, 0], bbs_dbg[:, 1], marker=".", c="c", alpha=0.5)
-        plt.scatter(ref_2d[:, 0], ref_2d[:, 1], marker=".", c="r", alpha=0.5)
+        plt.scatter(bbs_dbg[:, 0], bbs_dbg[:, 1], marker="x", c="c", alpha=0.5)
+        plt.scatter(ref_2d[:, 0], ref_2d[:, 1], marker="x", c="r", alpha=0.5)
         # plt.grid(True, color="r")
         plt.show()
 
     return bbs_centroid
-
-
-def deg2rad(angle_deg):
-    """Convert angles from degrees to radians.
-
-    :param angle_deg: Angle to convert
-    :type angle_deg: int or float
-    :return: Angle converted in radians
-    :rtype: float
-    """
-    return (np.pi / 180) * angle_deg
 
 
 def angle2rotm(rot_x, rot_y, rot_z):
@@ -380,7 +369,7 @@ def angle2rotm(rot_x, rot_y, rot_z):
     return trans
 
 
-def project_camera_matrix(r3d, image_center, camera_matrix):
+def project_camera_matrix(coord_3d, camera_matrix, image_center):
     """Project 3D data starting from camera matrix based on intrinsic and
     extrinsic parameters
 
@@ -395,18 +384,19 @@ def project_camera_matrix(r3d, image_center, camera_matrix):
      image plane [x,y]
     :rtype: numpy.array
     """
+    # homogeneous
+    coord_3d = np.append(coord_3d, np.ones((coord_3d.shape[0], 1)), axis=1)
 
-    r3d = np.append(r3d, np.ones((r3d.shape[0], 1)), axis=1)  # homogeneous
+    # Apply proj_matrix and project
+    coord_3d = np.matmul(camera_matrix, coord_3d.T).T
+    coord_3d[:, 0] = np.divide(coord_3d[:, 0], coord_3d[:, 2]) + image_center[0]
+    coord_3d[:, 1] = np.divide(coord_3d[:, 1], coord_3d[:, 2]) + image_center[1]
+    coord_2d = coord_3d[:, :2]
 
-    r3d = np.matmul(camera_matrix, r3d.T).T  # apply proj_matrix and project
-    r3d[:, 0] = np.divide(r3d[:, 0], r3d[:, 2]) + image_center[0]  # offset
-    r3d[:, 1] = np.divide(r3d[:, 1], r3d[:, 2]) + image_center[1]  # offset
-    r2d = r3d[:, :2]
-
-    return r2d
+    return coord_2d
 
 
-def create_camera_matrix(panel_orientation, sdd, sid, pixel_size, isocenter):
+def create_camera_matrix(panel_orientation, sdd, sid, pixel_spacing, isocenter):
     """Generate projection matrix starting from extrinsic and intrinsic
     parameters.
 
@@ -442,8 +432,8 @@ def create_camera_matrix(panel_orientation, sdd, sid, pixel_size, isocenter):
 
     # intrinsic parameters
     intrinsic = np.zeros((3, 4))
-    intrinsic[0, 0] = sdd / pixel_size[0]
-    intrinsic[1, 1] = sdd / pixel_size[1]
+    intrinsic[0, 0] = sdd / pixel_spacing[0]
+    intrinsic[1, 1] = sdd / pixel_spacing[1]
     intrinsic[2, 2] = 1
 
     # total camera matrix

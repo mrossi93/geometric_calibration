@@ -33,9 +33,9 @@ class IndexTracker(object):
         self.im_ref = self.ax.scatter(
             self.bbs[self.ind, :, 0],
             self.bbs[self.ind, :, 1],
-            marker=".",
+            marker="x",
             c="r",
-            s=30,
+            s=10,
             alpha=0.5,
         )
         self.update()
@@ -53,9 +53,9 @@ class IndexTracker(object):
         self.im_ref = self.ax.scatter(
             self.bbs[self.ind, :, 0],
             self.bbs[self.ind, :, 1],
-            marker=".",
+            marker="x",
             c="r",
-            s=30,
+            s=10,
             alpha=0.5,
         )
         self.ax.set_xlabel(
@@ -86,8 +86,8 @@ def slideshow(calibration_results, bbs_3d, mode):
             )
         projections.append(current_img)
 
-        T = create_camera_matrix(
-            calibration_results["panel_orientation"][k],
+        proj_matrix = create_camera_matrix(
+            calibration_results["detector_orientation"][k],
             calibration_results["sdd"][k],
             calibration_results["sid"][k],
             pixel_size,
@@ -95,7 +95,7 @@ def slideshow(calibration_results, bbs_3d, mode):
         )
         # projected coordinates of brandis on panel plane
         curr_bbs_2d = project_camera_matrix(
-            bbs_3d, calibration_results["img_center"][k], T
+            bbs_3d, proj_matrix, calibration_results["image_center"][k]
         )
         bbs_2d.append(curr_bbs_2d)
 
@@ -104,12 +104,14 @@ def slideshow(calibration_results, bbs_3d, mode):
 
     grayscale_range = get_grayscale_range(projections)
 
-    angles = calibration_results["proj_angles"]
+    gantry_angles = calibration_results["gantry_angles"]
 
     fig = plt.figure(num="Slideshow")
     ax = fig.add_subplot(111)
 
-    tracker = IndexTracker(ax, projections, angles, bbs_2d, grayscale_range)
+    tracker = IndexTracker(
+        ax, projections, gantry_angles, bbs_2d, grayscale_range
+    )
 
     def on_key_pressed(event):
         if event.key == "enter":
