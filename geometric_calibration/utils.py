@@ -406,17 +406,17 @@ def project_camera_matrix(r3d, image_center, camera_matrix):
     return r2d
 
 
-def create_camera_matrix(panel_orientation, sid, sad, pixel_size, isocenter):
+def create_camera_matrix(panel_orientation, sdd, sid, pixel_size, isocenter):
     """Generate projection matrix starting from extrinsic and intrinsic
     parameters.
 
     :param panel_orientation: Array nx3 containing rotations of the image's
      plane [rot_x, rot_y, rot_z]
     :type panel_orientation: numpy.array
+    :param sdd: SDD distance
+    :type sdd: float
     :param sid: SID distance
     :type sid: float
-    :param sad: SAD distance
-    :type sad: float
     :param pixel_size: Pixel Dimensions in mm
     :type pixel_size: list
     :param isocenter: Coordinates of isocenter
@@ -438,12 +438,12 @@ def create_camera_matrix(panel_orientation, sid, sad, pixel_size, isocenter):
 
     extrinsic[:3, :3] = rot[:]
     extrinsic[:3, 3] = transl
-    extrinsic[2, 3] = extrinsic[2, 3] + sad  # add sad
+    extrinsic[2, 3] = extrinsic[2, 3] + sid  # add sid
 
     # intrinsic parameters
     intrinsic = np.zeros((3, 4))
-    intrinsic[0, 0] = sid / pixel_size[1]
-    intrinsic[1, 1] = sid / pixel_size[0]
+    intrinsic[0, 0] = sdd / pixel_size[1]
+    intrinsic[1, 1] = sdd / pixel_size[0]
     intrinsic[2, 2] = 1
 
     # total camera matrix

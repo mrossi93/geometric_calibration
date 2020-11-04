@@ -88,8 +88,8 @@ def slideshow(calibration_results, bbs_3d, mode):
 
         T = create_camera_matrix(
             calibration_results["panel_orientation"][k],
+            calibration_results["sdd"][k],
             calibration_results["sid"][k],
-            calibration_results["sad"][k],
             pixel_size,
             calibration_results["isocenter"][k],
         )

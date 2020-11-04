@@ -29,8 +29,8 @@ from geometric_calibration.utils import (
 def calibrate_cbct(
     projection_dir,
     bbs_3d,
-    sad,
     sid,
+    sdd,
     center_offset=0,
     drag_every=0,
     debug_level=0,
@@ -41,10 +41,10 @@ def calibrate_cbct(
     :type projection_dir: str
     :param bbs_3d: array containing 3D coordinates of BBs
     :type bbs_3d: numpy.array
-    :param sad: nominal source to isocenter (A) distance
-    :type sad: float
-    :param sid: nominal source to image distance
+    :param sid: nominal source to isocenter (A) distance
     :type sid: float
+    :param sdd: nominal source to image distance
+    :type sdd: float
     :param center_offset: panel offset for half fan mode, defaults to 0
     :type center_offset: float, optional
     :return: dictionary with calibration results
@@ -117,8 +117,8 @@ def calibrate_cbct(
         "proj_path": [],
         "proj_angles": [],
         "panel_orientation": [],
+        "sdd": [],
         "sid": [],
-        "sad": [],
         "isocenter": [],
         "source": [],
         "panel": [],
@@ -146,8 +146,8 @@ def calibrate_cbct(
                 view_results = calibrate_projection(
                     proj_path,
                     bbs_3d,
-                    sad=sad,
                     sid=sid,
+                    sdd=sdd,
                     angle=angles[k],
                     angle_offset=90,  # 90 for simulation room, 0 for room 2
                     center_offset=center_offset,
@@ -170,8 +170,8 @@ def calibrate_cbct(
                     view_results = calibrate_projection(
                         proj_path,
                         bbs_3d,
-                        sad=sad,
                         sid=sid,
+                        sdd=sdd,
                         angle=angles[k - 1],
                         angle_offset=90 + angle_offset,  # 90 sim room, 0 room 2
                         img_dim=[1024, 768],
@@ -186,8 +186,8 @@ def calibrate_cbct(
                     view_results = calibrate_projection(
                         proj_path,
                         bbs_3d,
-                        sad=sad,
                         sid=sid,
+                        sdd=sdd,
                         angle=angles[k - 1],
                         angle_offset=90 + angle_offset,  # 90 sim room, 0 room 2
                         img_dim=[1024, 768],
@@ -204,8 +204,8 @@ def calibrate_cbct(
             results["panel_orientation"].append(
                 view_results["panel_orientation"]
             )
+            results["sdd"].append(view_results["sdd"])
             results["sid"].append(view_results["sid"])
-            results["sad"].append(view_results["sad"])
             results["isocenter"].append(view_results["isocenter"])
             results["source"].append(view_results["source"])
             results["panel"].append(view_results["panel"])
@@ -218,17 +218,17 @@ def calibrate_cbct(
     return results
 
 
-def calibrate_2d(projection_dir, bbs_3d, sad, sid, debug_level=0):
+def calibrate_2d(projection_dir, bbs_3d, sid, sdd, debug_level=0):
     """Main 2D Calibration routines.
 
     :param projection_dir: path to directory containing .raw files
     :type projection_dir: str
     :param bbs_3d: array containing 3D coordinates of BBs
     :type bbs_3d: numpy.array
-    :param sad: nominal source to isocenter (A) distance
-    :type sad: float
-    :param sid: nominal source to image distance
+    :param sid: nominal source to isocenter (A) distance
     :type sid: float
+    :param sdd: nominal source to image distance
+    :type sdd: float
     :return: dictionary with calibration results
     :rtype: dict
     """
@@ -259,8 +259,8 @@ Please check input_path parameter in configuration file."""
         "proj_path": [],
         "proj_angles": [],
         "panel_orientation": [],
+        "sdd": [],
         "sid": [],
-        "sad": [],
         "isocenter": [],
         "source": [],
         "panel": [],
@@ -285,8 +285,8 @@ Please check input_path parameter in configuration file."""
             view_results = calibrate_projection(
                 proj_path,
                 bbs_3d,
-                sad=sad,
                 sid=sid,
+                sdd=sdd,
                 angle=angles[k],
                 angle_offset=0,
                 img_dim=[2048, 1536],
@@ -302,8 +302,8 @@ Please check input_path parameter in configuration file."""
             results["panel_orientation"].append(
                 view_results["panel_orientation"]
             )
+            results["sdd"].append(view_results["sdd"])
             results["sid"].append(view_results["sid"])
-            results["sad"].append(view_results["sad"])
             results["isocenter"].append(view_results["isocenter"])
             results["source"].append(view_results["source"])
             results["panel"].append(view_results["panel"])
@@ -319,8 +319,8 @@ Please check input_path parameter in configuration file."""
 def calibrate_projection(
     projection_file,
     bbs_3d,
-    sad,
     sid,
+    sdd,
     angle,
     angle_offset=0,
     center_offset=0,
@@ -337,10 +337,10 @@ def calibrate_projection(
     :type projection_file: str
     :param bbs_3d: 3D coordinates of phantom's reference points
     :type bbs_3d: numpy.array
-    :param sad: nominal source to isocenter (A) distance
-    :type sad: float
-    :param sid: nominal source to image distance
+    :param sid: nominal source to isocenter (A) distance
     :type sid: float
+    :param sdd: nominal source to image distance
+    :type sdd: float
     :param angle: gantry angle for current projection
     :type angle: float
     :param angle_offset: angle offset for panel, defaults to 0
@@ -393,7 +393,7 @@ def calibrate_projection(
 
     # Project points starting from extrinsic and intrinsic parameters
     # generate proj_matrix (extrinsic and intrinsic parameters)
-    T = create_camera_matrix(panel_orientation, sid, sad, pixel_size, isocenter)
+    T = create_camera_matrix(panel_orientation, sdd, sid, pixel_size, isocenter)
     # projected coordinates of brandis on panel plane
     r2d = project_camera_matrix(
         bbs_3d, image_center, T
@@ -441,20 +441,20 @@ def calibrate_projection(
 
     # x0
     parameters = np.append(panel_orientation, image_center).tolist()
+    parameters.append(sdd)
     parameters.append(sid)
-    parameters.append(sad)
 
     # Boundaries
     angle_limit = 0.1
-    sid_sad_limit = 3
+    sdd_sid_limit = 3
     low_bound = [
         -angle_limit,
         -angle_limit,
         -np.pi,
         0,
         0,
-        sid - sid_sad_limit,
-        sad - sid_sad_limit,
+        sdd - sdd_sid_limit,
+        sid - sdd_sid_limit,
     ]
     up_bound = [
         angle_limit,
@@ -462,8 +462,8 @@ def calibrate_projection(
         np.pi,
         img_dim[1],
         img_dim[0],
-        sid + sid_sad_limit,
-        sad + sid_sad_limit,
+        sdd + sdd_sid_limit,
+        sid + sdd_sid_limit,
     ]
 
     if index.shape[0] >= 5:  # at least 5 BBs
@@ -484,8 +484,8 @@ def calibrate_projection(
         # New center of image
         image_center_new = np.array(sol[3:5])
 
-        sid_new = sol[5]
-        sad_new = sol[6]
+        sdd_new = sol[5]
+        sid_new = sol[6]
         isocenter_new = isocenter
     else:
         logging.error(
@@ -501,7 +501,7 @@ Please acquire again calibration phantom and then retry."""
     # project based on calibration - use new panel orientation,
     # tube and panel position
     T = create_camera_matrix(
-        panel_orientation_new, sid_new, sad_new, pixel_size, isocenter_new
+        panel_orientation_new, sdd_new, sid_new, pixel_size, isocenter_new
     )  # projected coordinates of brandis on panel plane
 
     bbs_estim_final = project_camera_matrix(
@@ -543,11 +543,11 @@ Please acquire again calibration phantom and then retry."""
     """
 
     # source position (X-ray tube)
-    source_new = np.matmul(R_new, np.array([[0], [0], [sad_new]]))
+    source_new = np.matmul(R_new, np.array([[0], [0], [sid_new]]))
 
     # panel position (center of panel)
     panel_center_new = np.matmul(
-        R_new, np.array([[0], [0], [sad_new - sid_new]])
+        R_new, np.array([[0], [0], [sid_new - sdd_new]])
     )
 
     dim_array = np.array([img_dim[0] / 2, img_dim[1] / 2, 0], ndmin=2)
@@ -562,8 +562,8 @@ Please acquire again calibration phantom and then retry."""
     # update with new value
     results["proj_angle"] = angle
     results["panel_orientation"] = panel_orientation_new
+    results["sdd"] = sdd_new
     results["sid"] = sid_new
-    results["sad"] = sad_new
     results["isocenter"] = isocenter_new
     results["source"] = source_new.flatten()
     results["panel"] = panel_center_new.flatten()
@@ -595,11 +595,11 @@ def calibration_cost_function(param, bbs_3d, pixel_size, bbs_2d, isocenter):
     # unknown
     panel_orientation = np.array(param[:3])
     img_center = np.array(param[3:5])
-    sid = np.array(param[5])
-    sad = np.array(param[6])
+    sdd = np.array(param[5])
+    sid = np.array(param[6])
 
     T = create_camera_matrix(
-        panel_orientation, sid, sad, pixel_size, isocenter
+        panel_orientation, sdd, sid, pixel_size, isocenter
     )  # projected coordinates of brandis on panel plane
     r2d = project_camera_matrix(
         bbs_3d, img_center, T
@@ -681,8 +681,8 @@ def save_lut_new_style(path, calib_results):
     angles = calib_results["proj_angles"]
     panel_orientation = calib_results["panel_orientation"]
     image_center = calib_results["img_center"]
+    sdd = calib_results["sdd"]
     sid = calib_results["sid"]
-    sad = calib_results["sad"]
 
     clock = datetime.now()
 
@@ -699,7 +699,7 @@ def save_lut_new_style(path, calib_results):
     with open(output_file, "w") as res_file:
         res_file.write("#Look Up Table for CBCT reconstruction\n")
         res_file.write(
-            "#Angle (deg) | Panel Orientation(rad) [X  Y  Z] | Image_center(pixel) X Y | SID(mm) | SAD(mm)\n"
+            "#Angle (deg) | Panel Orientation(rad) [X  Y  Z] | Image_center(pixel) X Y | SDD(mm) | SID(mm)\n"
         )
         res_file.write(
             "#Date:{}_{}_{}_Time:{}_{}_{}.{}\n".format(
@@ -724,8 +724,8 @@ def save_lut_new_style(path, calib_results):
                     panel_orientation[k][0],
                     image_center[k][0],
                     image_center[k][1],
+                    sdd[k],
                     sid[k],
-                    sad[k],
                 )
             )
 

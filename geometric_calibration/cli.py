@@ -92,13 +92,13 @@ def save_cli(path, results, mode):
     default=os.getcwd(),
 )
 @click.option(
-    "--sad",
+    "--sid",
     type=click.FLOAT,
     help="Nominal source to isocenter distance",
     default=1172.2,
 )
 @click.option(
-    "--sid",
+    "--sdd",
     type=click.FLOAT,
     help="Nominal source to image distance",
     default=1672.2,
@@ -129,7 +129,7 @@ def save_cli(path, results, mode):
     default=REF_BBS_DEFAULT_PATH,
 )
 @click_config_file.configuration_option()
-def main(mode, input_path, sad, sid, offset, drag_every, debug_level, ref):
+def main(mode, input_path, sid, sdd, offset, drag_every, debug_level, ref):
     """Console script for geometric_calibration.
 
     Author: Matteo Rossi"""
@@ -159,8 +159,8 @@ def main(mode, input_path, sad, sid, offset, drag_every, debug_level, ref):
         f"""Starting new calibration with the following parameters:
     Mode: {mode}
     Input Path: {input_path}
-    SAD: {sad}
-    SID: {sid}"""
+    SID: {sid}
+    SDD: {sdd}"""
     )
 
     # Just to avoid division by zero, in case user wrongly set this parameter
@@ -179,15 +179,15 @@ def main(mode, input_path, sad, sid, offset, drag_every, debug_level, ref):
         calibration_results = calibrate_cbct(
             input_path,
             bbs,
-            sad,
             sid,
+            sdd,
             center_offset=offset,
             drag_every=drag_every,
             debug_level=debug_level,
         )
     elif mode == "2d":
         calibration_results = calibrate_2d(
-            input_path, bbs, sad, sid, debug_level
+            input_path, bbs, sid, sdd, debug_level
         )
     else:
         logging.critical(
