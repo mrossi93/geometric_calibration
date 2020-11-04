@@ -147,7 +147,7 @@ class DraggablePoints:
         return np.array([a.center for a in self.artists])
 
 
-def drag_and_drop_bbs(projection, bbs_projected, grayscale_range):
+def drag_and_drop_bbs(projection, bbs_projected, image_center, grayscale_range):
     """Drag&Drop Routines for bbs position's correction.
 
     :param projection_path: Path to the projection .raw file
@@ -179,9 +179,16 @@ def drag_and_drop_bbs(projection, bbs_projected, grayscale_range):
         pts.append(point)
         ax.add_patch(point)
 
+    # Append also an invisible point to update also image_center coordinates
+    point = patches.Circle(
+        (image_center[0], image_center[1]), fc="r", alpha=0.5
+    )
+    pts.append(point)
+
     r2d_corrected = DraggablePoints(pts)
 
-    return r2d_corrected.final_coord
+    # remember that last coordinate is image_center
+    return r2d_corrected.final_coord[:-1], r2d_corrected.final_coord[-1]
 
 
 def search_bbs_centroids(

@@ -130,7 +130,7 @@ def calibrate_cbct(
 
     # Calibrate views
     with click.progressbar(
-        iterable=range(len(gantry_angles[:10])), fill_char="=", empty_char=" ",
+        iterable=range(len(gantry_angles[:30])), fill_char="=", empty_char=" ",
     ) as prog_bar:
         for k in prog_bar:
             # path of the current image
@@ -416,9 +416,10 @@ def calibrate_projection(
 
     if drag_and_drop is True:
         # Overlay reference bbs with projection
-        bbs_2d_corrected = drag_and_drop_bbs(
+        bbs_2d_corrected, image_center = drag_and_drop_bbs(
             projection=img,
             bbs_projected=bbs_2d,
+            image_center=image_center,
             grayscale_range=grayscale_range,
         )
 
