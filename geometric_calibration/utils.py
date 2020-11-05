@@ -11,7 +11,7 @@ from skimage.measure import regionprops
 
 from scipy.spatial.transform import Rotation as R
 
-matplotlib.rcParams["toolbar"] = "None"
+# matplotlib.rcParams["toolbar"] = "None"
 
 
 class DraggablePoints:
@@ -426,8 +426,7 @@ def create_camera_matrix(panel_orientation, sdd, sid, pixel_spacing, isocenter):
     # - http://ksimek.github.io/2012/08/22/extrinsic
 
     # extrinsic parameters (in homogeneous form)
-    extrinsic = np.zeros([4, 4])
-    extrinsic[3, 3] = 1
+    extrinsic = np.identity(4)
 
     rot = R.from_euler("zxy", panel_orientation).as_matrix().T
     C = np.array(isocenter)

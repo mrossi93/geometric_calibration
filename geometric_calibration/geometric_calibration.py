@@ -130,7 +130,7 @@ def calibrate_cbct(
 
     # Calibrate views
     with click.progressbar(
-        iterable=range(len(gantry_angles[:30])), fill_char="=", empty_char=" ",
+        iterable=range(len(gantry_angles)), fill_char="=", empty_char=" ",
     ) as prog_bar:
         for k in prog_bar:
             # path of the current image
@@ -241,12 +241,17 @@ def calibrate_2d(projection_dir, bbs_3d, sid, sdd, debug_level=0):
     gantry_angles = []
 
     for f in os.listdir(projection_dir):
-        if ("AP" or "RL") and (".raw" or ".hnc") in f:
-            proj_file.append(f)
+        if (".raw" or ".hnc") in f:
+            print(f)
             if "AP" in f:
+                proj_file.append(f)
                 gantry_angles.append(0)
-            elif "RL" in f:
+            if "RL" in f:
+                proj_file.append(f)
                 gantry_angles.append(90)
+    print("-----")
+    print(proj_file)
+    print("-----")
 
     if len(proj_file) == 0:
         logging.error(
@@ -458,9 +463,9 @@ def calibrate_projection(
     parameters.append(sid)
 
     # Boundaries
-    angle_limit = 0.1  # rad
-    distance_limit = 3  # mm
-    center_limit = 10  # pixel
+    angle_limit = 0.15  # rad
+    distance_limit = 4  # mm
+    center_limit = 50  # pixel
     low_bound = [
         -angle_limit,
         -angle_limit,
@@ -485,8 +490,8 @@ def calibrate_projection(
             fun=calibration_cost_function,
             x0=parameters,
             args=(bbs_real_init, bbs_estim_init, pixel_spacing, isocenter),
-            method="trf",
-            bounds=(low_bound, up_bound),
+            method="lm",
+            # bounds=(low_bound, up_bound),
             # verbose=2,
         )
 

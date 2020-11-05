@@ -20,6 +20,7 @@ def read_bbs_ref_file(filename):
     # spiral distribution visible on x-z plane
     # rotation along x about 90
     T_map = np.identity(4)
+    # Da controllare, ma nel codice originale usava -90
     T_map[:3, :3] = R.from_euler("x", 90, degrees=True).as_matrix()
 
     bbs = np.append(bbs, np.ones((bbs.shape[0], 1)), axis=1)  # Homogeneous
