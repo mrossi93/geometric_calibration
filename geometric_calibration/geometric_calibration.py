@@ -219,7 +219,15 @@ def calibrate_cbct(
     return results
 
 
-def calibrate_2d(projection_dir, bbs_3d, sid, sdd, debug_level=0):
+def calibrate_2d(
+    projection_dir,
+    bbs_3d,
+    sid,
+    sdd,
+    proj_offset=[0, 0],
+    source_offset=[0, 0],
+    debug_level=0,
+):
     """Main 2D Calibration routines.
 
     :param projection_dir: path to directory containing .raw files
@@ -242,16 +250,12 @@ def calibrate_2d(projection_dir, bbs_3d, sid, sdd, debug_level=0):
 
     for f in os.listdir(projection_dir):
         if (".raw" or ".hnc") in f:
-            print(f)
             if "AP" in f:
                 proj_file.append(f)
                 gantry_angles.append(0)
             if "RL" in f:
                 proj_file.append(f)
                 gantry_angles.append(90)
-    print("-----")
-    print(proj_file)
-    print("-----")
 
     if len(proj_file) == 0:
         logging.error(
@@ -261,6 +265,7 @@ Please check input_path parameter in configuration file."""
         sys.exit(1)
 
     # Initialize output dictionary
+    # TODO Make this as a function! It is repetead in many parts of the code
     results = {
         "proj_path": [],
         "gantry_angles": [],
@@ -294,6 +299,8 @@ Please check input_path parameter in configuration file."""
                 sdd=sdd,
                 gantry_angle=gantry_angles[k],
                 gantry_angle_offset=0,
+                proj_offset=proj_offset,
+                source_offset=source_offset,
                 image_size=[1536, 2048],
                 pixel_spacing=[0.194, 0.194],
                 search_area=14,
@@ -330,11 +337,14 @@ def calibrate_projection(
     sdd,
     gantry_angle,
     gantry_angle_offset=0,
-    center_offset=0,
+    # center_offset=0
+    proj_offset=[0, 0],
+    source_offset=[0, 0],
+    isocenter=[0, 0, 0],
     image_size=[768, 1024],
     pixel_spacing=[0.388, 0.388],
     search_area=7,
-    image_center=None,
+    # image_center=None,
     drag_and_drop=True,
     debug_level=0,
 ):
@@ -381,10 +391,10 @@ def calibrate_projection(
     results = {}
 
     # center_offset is the shift of the panel in half fan mode
-    if image_center is None:  # in case image_center is not declared
-        image_center = [image_size[0] / 2, image_size[1] / 2 + center_offset]
+    ##if image_center is None:  # in case image_center is not declared
+    ##    image_center = [image_size[0] / 2, image_size[1] / 2 + center_offset]
 
-    isocenter = [0, 0, 0]
+    ##isocenter = [0, 0, 0]
 
     # panel orientation (from panel to brandis reference - rotation along y)
     # Notation "zxy" to avoid gimbal lock on y=90
@@ -411,22 +421,34 @@ def calibrate_projection(
     # Project points starting from extrinsic and intrinsic parameters
     # generate proj_matrix (extrinsic and intrinsic parameters)
     proj_matrix = create_camera_matrix(
-        detector_orientation, sdd, sid, pixel_spacing, isocenter
+        detector_orientation,
+        sdd,
+        sid,
+        pixel_spacing,
+        isocenter,
+        proj_offset,
+        source_offset,
+        image_size,
     )
     # projected coordinates of brandis on panel plane
     # 2d coordinates of reference points
-    bbs_2d = project_camera_matrix(bbs_3d, proj_matrix, image_center)
+    bbs_2d = project_camera_matrix(bbs_3d, proj_matrix, image_size)
 
     grayscale_range = get_grayscale_range(img)
 
     if drag_and_drop is True:
         # Overlay reference bbs with projection
-        bbs_2d_corrected, image_center = drag_and_drop_bbs(
+        bbs_2d_corrected = drag_and_drop_bbs(
             projection=img,
             bbs_projected=bbs_2d,
-            image_center=image_center,
             grayscale_range=grayscale_range,
         )
+        ##bbs_2d_corrected, image_center = drag_and_drop_bbs(
+        ##    projection=img,
+        ##    bbs_projected=bbs_2d,
+        ##    image_center=image_center,
+        ##    grayscale_range=grayscale_range,
+        ##)
 
     # Starting from the updated coordinates, define a search area around them
     # and identify the bbs as black pixels inside these areas (brandis are used
@@ -458,14 +480,18 @@ def calibrate_projection(
     bbs_real_init = bbs_3d[good_bbs_index, :]
 
     # Initialization of parameters
-    parameters = np.append(detector_orientation, image_center).tolist()
+    ##parameters = np.append(detector_orientation, image_center).tolist()
+    parameters = np.append(detector_orientation, proj_offset).tolist()
     parameters.append(sdd)
     parameters.append(sid)
+    parameters.append(source_offset[0])
+    parameters.append(source_offset[1])
 
     # Boundaries
     angle_limit = 0.15  # rad
     distance_limit = 4  # mm
     center_limit = 50  # pixel
+    """
     low_bound = [
         -angle_limit,
         -angle_limit,
@@ -484,12 +510,18 @@ def calibrate_projection(
         sdd + distance_limit,
         sid + distance_limit,
     ]
-
+    """
     if good_bbs_index.shape[0] >= 5:  # at least 5 BBs
         solution = least_squares(
             fun=calibration_cost_function,
             x0=parameters,
-            args=(bbs_real_init, bbs_estim_init, pixel_spacing, isocenter),
+            args=(
+                bbs_real_init,
+                bbs_estim_init,
+                pixel_spacing,
+                isocenter,
+                image_size,
+            ),
             method="lm",
             # bounds=(low_bound, up_bound),
             # verbose=2,
@@ -502,10 +534,13 @@ def calibrate_projection(
         detector_orientation_new = np.array(solution[:3])
 
         # New center of image
-        image_center_new = np.array(solution[3:5])
+        ##image_center_new = np.array(solution[3:5])
+        proj_offset_new = solution[3:5]
 
         sdd_new = solution[5]
         sid_new = solution[6]
+
+        source_offset_new = solution[7:]
 
         isocenter_new = isocenter
 
@@ -523,12 +558,17 @@ Please acquire again calibration phantom and then retry."""
     # Project points based on calibration - use new panel orientation,
     # tube and panel position
     proj_matrix_new = create_camera_matrix(
-        detector_orientation_new, sdd_new, sid_new, pixel_spacing, isocenter_new
+        detector_orientation_new,
+        sdd_new,
+        sid_new,
+        pixel_spacing,
+        isocenter_new,
+        proj_offset_new,
+        source_offset_new,
+        image_size,
     )
 
-    bbs_estim_final = project_camera_matrix(
-        bbs_3d, proj_matrix_new, image_center_new
-    )
+    bbs_estim_final = project_camera_matrix(bbs_3d, proj_matrix_new, image_size)
 
     # calculate improvement: estimated - projected
     err_init = bbs_estim_init - bbs_2d[good_bbs_index, :]
@@ -538,30 +578,41 @@ Please acquire again calibration phantom and then retry."""
     err_final = np.mean(abs(err_final))
 
     # calculate new source/panel position
-    R_new = R.from_euler("zxy", detector_orientation_new).as_matrix()
+    R_new_base = R.from_euler("zxy", detector_orientation_new).as_matrix()
 
     # Referred to isocenter
     R_new = np.matmul(
-        R_new.T, R.from_euler("zxy", [-90, 0, 0], degrees=True).as_matrix()
+        R_new_base.T, R.from_euler("zxy", [-90, 0, 0], degrees=True).as_matrix()
     )
 
     # source position (X-ray tube)
     source_new = np.matmul(R_new, np.array([[0], [0], [sid_new]]))
 
     # panel position (center of panel)
-    panel_center_new = np.matmul(
-        R_new, np.array([[0], [0], [sid_new - sdd_new]])
+    image_center_new_mm = image_center_new * pixel_spacing
+    # panel_center_new = np.matmul(
+    #    R_new, np.array([0], [0], [sid_new - sdd_new]])
+    # )
+    panel_new = np.matmul(
+        R_new,
+        np.array(
+            [
+                [image_center_new_mm[0]],
+                [image_center_new_mm[1]],
+                [sid_new - sdd_new],
+            ]
+        ),
     )
 
     # TODO: questo va rivisto
-    dim_array = np.array([image_size[0] / 2, image_size[1] / 2, 0], ndmin=2)
-    pixel_array = np.array([pixel_spacing[0], pixel_spacing[1], 1], ndmin=2)
+    # dim_array = np.array([image_size[0] / 2, image_size[1] / 2, 0], ndmin=2)
+    # pixel_array = np.array([pixel_spacing[0], pixel_spacing[1], 1], ndmin=2)
 
     # offset in local coordinate system
-    panel_offset_new = dim_array * pixel_array
+    # panel_offset_new = dim_array * pixel_array
 
     # referred to isocenter
-    panel_offset_new = panel_center_new - np.matmul(R_new, panel_offset_new.T)
+    # panel_offset_new = panel_center_new - np.matmul(R_new, panel_offset_new.T)
 
     # update with new value
     results["gantry_angle"] = gantry_angle
@@ -570,17 +621,19 @@ Please acquire again calibration phantom and then retry."""
     results["sid"] = sid_new
     results["isocenter"] = isocenter_new
     results["source"] = source_new.flatten()
-    results["panel"] = panel_center_new.flatten()
+    results["panel"] = panel_new.flatten()  # panel_center_new.flatten()
     results["image_center"] = image_center_new
     results["detector_rot_matrix"] = R_new
-    results["panel_offset"] = panel_offset_new.flatten()
+    results["panel_offset"] = panel_new.flatten()  # _offset_new.flatten()
     results["err_init"] = err_init
     results["err_final"] = err_final
 
     return results
 
 
-def calibration_cost_function(param, bbs_3d, bbs_2d, pixel_size, isocenter):
+def calibration_cost_function(
+    param, bbs_3d, bbs_2d, pixel_spacing, isocenter, image_size
+):
     """Cost Function for calibration optimizers.
 
     :param param: parameters to be optimized
@@ -598,14 +651,23 @@ def calibration_cost_function(param, bbs_3d, bbs_2d, pixel_size, isocenter):
     """
     # unknown
     detector_orientation = np.array(param[:3])
-    image_center = np.array(param[3:5])
+    # image_center = np.array(param[3:5])
+    proj_offset = np.array(param[3:5])
     sdd = np.array(param[5])
     sid = np.array(param[6])
+    source_offset = np.array(param[7:])
 
     proj_matrix = create_camera_matrix(
-        detector_orientation, sdd, sid, pixel_size, isocenter
+        detector_orientation,
+        sdd,
+        sid,
+        pixel_spacing,
+        isocenter,
+        proj_offset,
+        source_offset,
+        image_size,
     )
-    r2d = project_camera_matrix(bbs_3d, proj_matrix, image_center)
+    r2d = project_camera_matrix(bbs_3d, proj_matrix, image_size)
 
     delta = r2d - bbs_2d  # Error
 
@@ -661,6 +723,15 @@ def plot_calibration_results(calib_results):
         c="b",
         label="Isocenter Position",
     )
+
+    for source, panel in zip(source_pos, panel_pos):
+        ax.plot(
+            [source[0], panel[0]],
+            [source[1], panel[1]],
+            [source[2], panel[2]],
+            c="k",
+            linewidth=0.1,
+        )
 
     plt.title("Panel/Source position after calibration\nPress Enter to close")
     ax.set_xlabel("X Label [mm]")

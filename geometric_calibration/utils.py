@@ -147,7 +147,7 @@ class DraggablePoints:
         return np.array([a.center for a in self.artists])
 
 
-def drag_and_drop_bbs(projection, bbs_projected, image_center, grayscale_range):
+def drag_and_drop_bbs(projection, bbs_projected, grayscale_range):
     """Drag&Drop Routines for bbs position's correction.
 
     :param projection_path: Path to the projection .raw file
@@ -180,15 +180,15 @@ def drag_and_drop_bbs(projection, bbs_projected, image_center, grayscale_range):
         ax.add_patch(point)
 
     # Append also an invisible point to update also image_center coordinates
-    point = patches.Circle(
-        (image_center[0], image_center[1]), fc="r", alpha=0.5
-    )
-    pts.append(point)
+    ##point = patches.Circle(
+    ##    (image_center[0], image_center[1]), fc="r", alpha=0.5
+    ##)
+    ##pts.append(point)
 
     r2d_corrected = DraggablePoints(pts)
 
     # remember that last coordinate is image_center
-    return r2d_corrected.final_coord[:-1], r2d_corrected.final_coord[-1]
+    return r2d_corrected.final_coord  # [:-1], r2d_corrected.final_coord[-1]
 
 
 def search_bbs_centroids(
@@ -376,7 +376,94 @@ def angle2rotm(rot_x, rot_y, rot_z):
     return trans
 
 
-def project_camera_matrix(coord_3d, camera_matrix, image_center):
+def project_camera_matrix(coord_3d, camera_matrix, image_size):
+    """Project 3D data starting from camera matrix based on intrinsic and
+    extrinsic parameters
+
+    :param r3d: Array nx3 containing 3d coordinates of points [x,y,z]
+    :type r3d: numpy.array
+    :param image_center: Center of the image in pixels
+    :type image_center: list
+    :param camera_matrix: Projection matrix obtained combining extrinsic
+     and intrinsic parameters
+    :type camera_matrix: numpy.array
+    :return: Array nx2 containing 2D coordinates of points projected on
+     image plane [x,y]
+    :rtype: numpy.array
+    """
+    # homogeneous
+    coord_3d = np.append(coord_3d, np.ones((coord_3d.shape[0], 1)), axis=1)
+
+    # Apply proj_matrix and project
+    coord_3d = np.matmul(camera_matrix, coord_3d.T).T
+    coord_3d[:, 0] = (
+        np.divide(coord_3d[:, 0], coord_3d[:, 2]) + image_size[0] / 2
+    )
+    coord_3d[:, 1] = (
+        np.divide(coord_3d[:, 1], coord_3d[:, 2]) + image_size[1] / 2
+    )
+    coord_2d = coord_3d[:, :2]
+
+    return coord_2d
+
+
+def create_camera_matrix(
+    panel_orientation,
+    sdd,
+    sid,
+    pixel_spacing,
+    isocenter,
+    proj_offset,
+    source_offset,
+    image_size,
+):
+    """Generate projection matrix starting from extrinsic and intrinsic
+    parameters (according to the rules of creation of a projection matrix)
+    MODIFIED BY GABRIELE BELOTTI
+    
+    :param panel_orientation: Array nx3 containing rotations of the image's
+     plane [rot_x, rot_y, rot_z]
+    :type panel_orientation: numpy.array
+    :param sdd: SDD distance
+    :type sdd: float
+    :param sid: SID distance
+    :type sid: float
+    :param pixel_size: Pixel Dimensions in mm
+    :type pixel_size: list
+    :param isocenter: Coordinates of isocenter
+    :type isocenter: numpy.array
+    :return: 3x4 Camera Matrix
+    :rtype: numpy.array
+    """
+
+    # extrinsic parameters (in homogeneous form)
+    extrinsic = np.identity(4)
+    extrinsic[:3, :3] = R.from_euler("zxy", panel_orientation).as_matrix().T
+
+    # add isocenter projection in extrinsic matrix
+    extrinsic[:3, 3] = np.matmul(extrinsic[:3, :3], isocenter)
+
+    # add source offset to the equations
+    extrinsic[0, 3] = extrinsic[0, 3] - source_offset[0]
+    extrinsic[1, 3] = extrinsic[1, 3] - source_offset[1]
+    extrinsic[2, 3] = extrinsic[2, 3] + sid
+
+    # intrinsic parameters
+    intrinsic = np.zeros([3, 4])
+    intrinsic[0, 0] = sdd / pixel_spacing[0]
+    intrinsic[1, 1] = sdd / pixel_spacing[1]
+    intrinsic[2, 2] = 1
+    # add projection offset to the equations
+    intrinsic[0, 2] = (source_offset[0] - proj_offset[0]) / pixel_spacing[0]
+    intrinsic[1, 2] = (source_offset[1] - proj_offset[1]) / pixel_spacing[1]
+
+    # camera matrix
+    camera_matrix = np.matmul(intrinsic, extrinsic)
+
+    return camera_matrix
+
+
+def project_camera_matrix_old(coord_3d, camera_matrix, image_center):
     """Project 3D data starting from camera matrix based on intrinsic and
     extrinsic parameters
 
@@ -403,7 +490,9 @@ def project_camera_matrix(coord_3d, camera_matrix, image_center):
     return coord_2d
 
 
-def create_camera_matrix(panel_orientation, sdd, sid, pixel_spacing, isocenter):
+def create_camera_matrix_old(
+    panel_orientation, sdd, sid, pixel_spacing, isocenter
+):
     """Generate projection matrix starting from extrinsic and intrinsic
     parameters.
 

@@ -187,7 +187,7 @@ def main(mode, input_path, sid, sdd, offset, drag_every, debug_level, ref):
         )
     elif mode == "2d":
         calibration_results = calibrate_2d(
-            input_path, bbs, sid, sdd, debug_level
+            input_path, bbs, sid, sdd, debug_level=debug_level
         )
     else:
         logging.critical(
