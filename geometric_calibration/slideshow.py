@@ -87,15 +87,18 @@ def slideshow(calibration_results, bbs_3d, mode):
         projections.append(current_img)
 
         proj_matrix = create_camera_matrix(
-            calibration_results["detector_orientation"][k],
-            calibration_results["sdd"][k],
-            calibration_results["sid"][k],
-            pixel_size,
-            calibration_results["isocenter"][k],
+            detector_orientation=calibration_results["detector_orientation"][k],
+            sdd=calibration_results["sdd"][k],
+            sid=calibration_results["sid"][k],
+            pixel_spacing=pixel_size,
+            isocenter=calibration_results["isocenter"][k],
+            proj_offset=calibration_results["proj_offset"][k],
+            source_offset=calibration_results["source_offset"][k],
+            image_size=img_dim,
         )
         # projected coordinates of brandis on panel plane
         curr_bbs_2d = project_camera_matrix(
-            bbs_3d, proj_matrix, calibration_results["image_center"][k]
+            coord_3d=bbs_3d, camera_matrix=proj_matrix, image_size=img_dim
         )
         bbs_2d.append(curr_bbs_2d)
 

@@ -234,6 +234,8 @@ def search_bbs_centroids(
             or (ind_col > image_size[1])
         ):
             bbs_centroid.append([np.nan, np.nan])
+            if debug_level >= 1:
+                print("Out of image")
             continue
 
         # define the field of research
@@ -250,11 +252,13 @@ def search_bbs_centroids(
 
         # Binarize sub_image to extract the bbs
         try:
-            thresh = threshold_otsu(sub_img)
+            thresh = threshold_otsu(sub_img, nbins=1024)
         except Exception:
             # we are finished in a total white window, otsu thresholding needs
             # at least two level of gray to work
             bbs_centroid.append([np.nan, np.nan])
+            if debug_level >= 1:
+                print("Monochromatic window")
             continue
         binary = sub_img > thresh
 
@@ -263,8 +267,21 @@ def search_bbs_centroids(
         background = np.count_nonzero(binary)
 
         # if background is too dark, discard the bbs
-        if blob / background > 0.25:
+        # TODO flag per synth data che evita questo controllo
+        if blob / background > 1.5:  # 0.25:
             bbs_centroid.append([np.nan, np.nan])
+            if debug_level >= 1:
+                print("Too much background")
+            if debug_level >= 2:
+                fig, ax = plt.subplots()
+
+                ax.imshow(
+                    sub_img,
+                    cmap="gray",
+                    vmin=grayscale_range[0],
+                    vmax=grayscale_range[1],
+                )
+                plt.show()
             continue
 
         # Extract centroid from thresholded sub_image
@@ -275,16 +292,16 @@ def search_bbs_centroids(
         # Append centroid to bbs list
         bbs_centroid.append([min_row + centroid[1], min_col + centroid[0]])
 
-        def on_key_pressed(event):
-            if event.key == "enter":
-                plt.close()
+        # def on_key_pressed(event):
+        #    if event.key == "enter":
+        #        plt.close()
 
         if debug_level == 2:
             # Show every centroid found
             hist, hist_centers = histogram(sub_img, nbins=100)
 
             fig, axes = plt.subplots(ncols=3, figsize=(8, 2.5))
-            fig.canvas.mpl_connect("key_press_event", on_key_pressed)
+            # fig.canvas.mpl_connect("key_press_event", on_key_pressed)
 
             ax = axes.ravel()
             ax[0] = plt.subplot(1, 3, 1)
@@ -314,15 +331,19 @@ def search_bbs_centroids(
     if debug_level >= 1:
         # Show final position for found cetroids
         bbs_dbg = bbs_centroid[~np.isnan(bbs_centroid).any(axis=1)]
+        print(f"Centroid found: {bbs_dbg.shape[0]}")
+        print("Centroid positions:")
         print(bbs_dbg)
 
-        fig = plt.figure()
-        fig.canvas.mpl_connect("key_press_event", on_key_pressed)
+        # fig = plt.figure()
+        # fig.canvas.mpl_connect("key_press_event", on_key_pressed)
 
         plt.imshow(
             img, cmap="gray", vmin=grayscale_range[0], vmax=grayscale_range[1],
         )
-        plt.scatter(bbs_dbg[:, 0], bbs_dbg[:, 1], marker="x", c="c", alpha=0.5)
+        plt.scatter(
+            bbs_dbg[:, 0], bbs_dbg[:, 1], marker="x", c="g"
+        )  # , alpha=0.5)
         plt.scatter(ref_2d[:, 0], ref_2d[:, 1], marker="x", c="r", alpha=0.5)
         # plt.grid(True, color="r")
         plt.show()
@@ -391,24 +412,21 @@ def project_camera_matrix(coord_3d, camera_matrix, image_size):
      image plane [x,y]
     :rtype: numpy.array
     """
-    # homogeneous
-    coord_3d = np.append(coord_3d, np.ones((coord_3d.shape[0], 1)), axis=1)
-
     # Apply proj_matrix and project
-    coord_3d = np.matmul(camera_matrix, coord_3d.T).T
-    coord_3d[:, 0] = (
-        np.divide(coord_3d[:, 0], coord_3d[:, 2]) + image_size[0] / 2
+    coord_2d = np.dot(
+        camera_matrix,
+        np.concatenate((coord_3d.T, np.ones((1, coord_3d.shape[0])))),
     )
-    coord_3d[:, 1] = (
-        np.divide(coord_3d[:, 1], coord_3d[:, 2]) + image_size[1] / 2
-    )
-    coord_2d = coord_3d[:, :2]
+    coord_2d = coord_2d / coord_2d[2, :]
+    coord_2d = coord_2d[:2, :].T
+
+    coord_2d = coord_2d + np.array(image_size) / 2
 
     return coord_2d
 
 
 def create_camera_matrix(
-    panel_orientation,
+    detector_orientation,
     sdd,
     sid,
     pixel_spacing,
@@ -438,7 +456,7 @@ def create_camera_matrix(
 
     # extrinsic parameters (in homogeneous form)
     extrinsic = np.identity(4)
-    extrinsic[:3, :3] = R.from_euler("zxy", panel_orientation).as_matrix().T
+    extrinsic[:3, :3] = R.from_euler("zxy", detector_orientation).as_matrix().T
 
     # add isocenter projection in extrinsic matrix
     extrinsic[:3, 3] = np.matmul(extrinsic[:3, :3], isocenter)
@@ -463,80 +481,6 @@ def create_camera_matrix(
     return camera_matrix
 
 
-def project_camera_matrix_old(coord_3d, camera_matrix, image_center):
-    """Project 3D data starting from camera matrix based on intrinsic and
-    extrinsic parameters
-
-    :param r3d: Array nx3 containing 3d coordinates of points [x,y,z]
-    :type r3d: numpy.array
-    :param image_center: Center of the image
-    :type image_center: list
-    :param camera_matrix: Projection matrix obtained combining extrinsic
-     and intrinsic parameters
-    :type camera_matrix: numpy.array
-    :return: Array nx2 containing 2D coordinates of points projected on
-     image plane [x,y]
-    :rtype: numpy.array
-    """
-    # homogeneous
-    coord_3d = np.append(coord_3d, np.ones((coord_3d.shape[0], 1)), axis=1)
-
-    # Apply proj_matrix and project
-    coord_3d = np.matmul(camera_matrix, coord_3d.T).T
-    coord_3d[:, 0] = np.divide(coord_3d[:, 0], coord_3d[:, 2]) + image_center[0]
-    coord_3d[:, 1] = np.divide(coord_3d[:, 1], coord_3d[:, 2]) + image_center[1]
-    coord_2d = coord_3d[:, :2]
-
-    return coord_2d
-
-
-def create_camera_matrix_old(
-    panel_orientation, sdd, sid, pixel_spacing, isocenter
-):
-    """Generate projection matrix starting from extrinsic and intrinsic
-    parameters.
-
-    :param panel_orientation: Array nx3 containing rotations of the image's
-     plane [rot_x, rot_y, rot_z]
-    :type panel_orientation: numpy.array
-    :param sdd: SDD distance
-    :type sdd: float
-    :param sid: SID distance
-    :type sid: float
-    :param pixel_size: Pixel Dimensions in mm
-    :type pixel_size: list
-    :param isocenter: Coordinates of isocenter
-    :type isocenter: numpy.array
-    :return: 3x4 Camera Matrix
-    :rtype: numpy.array
-    """
-    # References:
-    # - http://ksimek.github.io/2012/08/14/decompose/
-    # - http://ksimek.github.io/2012/08/22/extrinsic
-
-    # extrinsic parameters (in homogeneous form)
-    extrinsic = np.identity(4)
-
-    rot = R.from_euler("zxy", panel_orientation).as_matrix().T
-    C = np.array(isocenter)
-    transl = -np.matmul(rot, C)
-
-    extrinsic[:3, :3] = rot[:]
-    extrinsic[:3, 3] = transl
-    extrinsic[2, 3] = extrinsic[2, 3] + sid  # add sid
-
-    # intrinsic parameters
-    intrinsic = np.zeros((3, 4))
-    intrinsic[0, 0] = sdd / pixel_spacing[0]
-    intrinsic[1, 1] = sdd / pixel_spacing[1]
-    intrinsic[2, 2] = 1
-
-    # total camera matrix
-    camera_matrix = np.matmul(intrinsic, extrinsic)
-
-    return camera_matrix
-
-
 def get_grayscale_range(img):
     """New grayscale range for .raw images, since original values are too
     bright. New range is computed between min of image and one order of
@@ -549,7 +493,8 @@ def get_grayscale_range(img):
     :rtype: list
     """
     # image range - lowest and highest gray-level intensity for projection
-    grayscale_range = [np.amin(img), np.amax(img) / 10]
+    # grayscale_range = [np.amin(img), np.amax(img) / 10]
+    grayscale_range = [0, 8000]
     return grayscale_range
 
 

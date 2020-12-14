@@ -8,10 +8,10 @@ from geometric_calibration.reader import read_bbs_ref_file
 from geometric_calibration.geometric_calibration import (
     calibrate_cbct,
     calibrate_2d,
-    save_lut_new_style,
-    save_lut_classic_style,
+    save_lut,
     save_lut_planar,
     plot_calibration_results,
+    plot_calibration_errors,
 )
 from geometric_calibration.slideshow import slideshow
 
@@ -44,8 +44,10 @@ def save_cli(path, results, mode):
         click.echo("\nFound existing LUT for this phantom:")
         for file in old_files:
             click.echo("{}".format(file))
+        # !!! NB: per il momento le vecchie lut vengono sempre cancellate di default
+        # Ricordarsi di impostare default=False in production
         if click.confirm(
-            "Do you want to delete it?", default=False, show_default=True
+            "Do you want to delete it?", default=True, show_default=True
         ):
             for file in old_files:
                 os.remove(os.path.join(path, file))
@@ -57,17 +59,27 @@ def save_cli(path, results, mode):
             """\nChoose a style:
                     c\tClassic Style (6 columns)
                     n\tNew Style (8 columns)
+                    t\tComplete (10 columns)
+                    *\tSave every modality
                     """,
             prompt_suffix="\rYour choice: ",
             type=str,
-            default="c",
+            default="*",  # Save every style for now
         )
         if lut_style == "c":
-            save_lut_classic_style(path, results)
+            save_lut(path, results, "classic")
             style_string = "classic"
         elif lut_style == "n":
-            save_lut_new_style(path, results)
+            save_lut(path, results, "new")
             style_string = "new"
+        elif lut_style == "t":
+            save_lut(path, results, "complete")
+            style_string = "complete"
+        elif lut_style == "*":
+            save_lut(path, results, "classic")
+            save_lut(path, results, "new")
+            save_lut(path, results, "complete")
+            style_string = "every"
         else:
             print("Invalid style")
             return
@@ -104,12 +116,6 @@ def save_cli(path, results, mode):
     default=1672.2,
 )
 @click.option(
-    "--offset",
-    type=click.FLOAT,
-    help="Panel offset for Half-Fan Mode",
-    default=0,
-)
-@click.option(
     "--drag_every",
     type=click.INT,
     help="Manually reposition the reference points every N projections",
@@ -129,7 +135,7 @@ def save_cli(path, results, mode):
     default=REF_BBS_DEFAULT_PATH,
 )
 @click_config_file.configuration_option()
-def main(mode, input_path, sid, sdd, offset, drag_every, debug_level, ref):
+def main(mode, input_path, sid, sdd, drag_every, debug_level, ref):
     """Console script for geometric_calibration.
 
     Author: Matteo Rossi"""
@@ -177,17 +183,24 @@ def main(mode, input_path, sid, sdd, offset, drag_every, debug_level, ref):
 
     if mode == "cbct":
         calibration_results = calibrate_cbct(
-            input_path,
-            bbs,
-            sid,
-            sdd,
-            center_offset=offset,
+            projection_dir=input_path,
+            bbs_3d=bbs,
+            sid=sid,
+            sdd=sdd,
+            proj_offset=[0, 0],
+            source_offset=[0, 0],
             drag_every=drag_every,
             debug_level=debug_level,
         )
     elif mode == "2d":
         calibration_results = calibrate_2d(
-            input_path, bbs, sid, sdd, debug_level=debug_level
+            projection_dir=input_path,
+            bbs_3d=bbs,
+            sid=sid,
+            sdd=sdd,
+            proj_offset=[0, 0],
+            source_offset=[0, 0],
+            debug_level=debug_level,
         )
     else:
         logging.critical(
@@ -205,6 +218,7 @@ def main(mode, input_path, sid, sdd, offset, drag_every, debug_level, ref):
                 s\tSave
                 p\tPlot
                 l\tSlideshow
+                e\tErrors
                 c\tClose
                 """,
             prompt_suffix="\rYour choice: ",
@@ -217,7 +231,11 @@ def main(mode, input_path, sid, sdd, offset, drag_every, debug_level, ref):
             plot_calibration_results(calibration_results)
         elif user_choice == "l":
             slideshow(calibration_results, bbs, mode)
+        elif user_choice == "e":
+            plot_calibration_errors(calibration_results)
+
         elif user_choice == "c":
+            """
             if save_flag is False:
                 if click.confirm(
                     "New LUT not saved. Do you want to save it?",
@@ -225,6 +243,7 @@ def main(mode, input_path, sid, sdd, offset, drag_every, debug_level, ref):
                     show_default=True,
                 ):
                     save_cli(input_path, calibration_results, mode)
+            """
             break
         else:
             click.echo("Command '{}' not recognized.".format(user_choice))
