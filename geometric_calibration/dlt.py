@@ -34,7 +34,7 @@ def Normalization(nd, x):
     return Tr, x
 
 
-def DLTcalib(nd, xyz, uv, uv_ref=None):
+def DLTcalib(nd, xyz, uv, weights=None, uv_ref=None):
     """
     Camera calibration by DLT using known object points and their
     corresponding image points.
@@ -94,8 +94,22 @@ def DLTcalib(nd, xyz, uv, uv_ref=None):
     for i in range(n):
         x, y, z = xyzn[i, 0], xyzn[i, 1], xyzn[i, 2]
         u, v = uvn[i, 0], uvn[i, 1]
-        A.append([x, y, z, 1, 0, 0, 0, 0, -u * x, -u * y, -u * z, -u])
-        A.append([0, 0, 0, 0, x, y, z, 1, -v * x, -v * y, -v * z, -v])
+
+        if weights is not None:
+            current_A = np.dot(
+                weights[i],
+                np.array(
+                    [
+                        [x, y, z, 1, 0, 0, 0, 0, -u * x, -u * y, -u * z, -u],
+                        [0, 0, 0, 0, x, y, z, 1, -v * x, -v * y, -v * z, -v],
+                    ]
+                ),
+            ).tolist()
+            A.append(current_A[0])
+            A.append(current_A[1])
+        else:
+            A.append([x, y, z, 1, 0, 0, 0, 0, -u * x, -u * y, -u * z, -u])
+            A.append([0, 0, 0, 0, x, y, z, 1, -v * x, -v * y, -v * z, -v])
 
     # Convert A to array
     A = np.asarray(A)
