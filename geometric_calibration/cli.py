@@ -12,6 +12,7 @@ from geometric_calibration.geometric_calibration import (
     save_lut_planar,
     plot_calibration_results,
     plot_calibration_errors,
+    plot_offset_variability,
 )
 from geometric_calibration.slideshow import slideshow
 
@@ -219,6 +220,7 @@ def main(mode, input_path, sid, sdd, drag_every, debug_level, ref):
                 p\tPlot
                 l\tSlideshow
                 e\tErrors
+                v\tVariability
                 c\tClose
                 """,
             prompt_suffix="\rYour choice: ",
@@ -233,7 +235,8 @@ def main(mode, input_path, sid, sdd, drag_every, debug_level, ref):
             slideshow(calibration_results, bbs, mode)
         elif user_choice == "e":
             plot_calibration_errors(calibration_results)
-
+        elif user_choice == "v":
+            plot_offset_variability(calibration_results)
         elif user_choice == "c":
             """
             if save_flag is False:

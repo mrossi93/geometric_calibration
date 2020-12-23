@@ -286,13 +286,12 @@ def search_bbs_centroids(
             num_peaks=1,
             total_num_peaks=1,
         )
-        """
-        print("---------")
-        print(accums)
-        print(f"{cx}, {cy}")
-        print(radii)
-        print("---------")
-        """
+        if debug_level >= 2:
+            print("---------")
+            print(f"Accum: {accums}")
+            print(f"Cx: {cx}, Cy: {cy}")
+            print(f"Radius: {radii}")
+            print("---------")
 
         if accums[0] < 0.50:
             if debug_level >= 1:

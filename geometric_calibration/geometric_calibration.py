@@ -1,5 +1,6 @@
 """Main module."""
 
+import time
 import os
 import logging
 import sys
@@ -7,6 +8,7 @@ from datetime import datetime
 import configparser
 import numpy as np
 from scipy.optimize import least_squares
+from lmfit import Parameters, minimize, fit_report
 import click
 import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation as R
@@ -35,7 +37,6 @@ def calibrate_cbct(
     sdd,
     proj_offset=[0, 0],
     source_offset=[0, 0],
-    # center_offset=0,
     drag_every=0,
     debug_level=0,
 ):
@@ -121,7 +122,7 @@ def calibrate_cbct(
 
     # Calibrate views
     with click.progressbar(
-        iterable=range(len(gantry_angles[:10])), fill_char="=", empty_char=" ",
+        iterable=range(len(gantry_angles)), fill_char="=", empty_char=" ",
     ) as prog_bar:
         for k in prog_bar:
             # path of the current image
@@ -145,6 +146,7 @@ def calibrate_cbct(
                     pixel_spacing=[0.388, 0.388],
                     search_area=15,
                     drag_and_drop=True,
+                    dlt_estimate=True,
                     debug_level=debug_level,
                 )
             # For every other projection, we can simpy use the results of
@@ -171,6 +173,7 @@ def calibrate_cbct(
                         pixel_spacing=[0.388, 0.388],
                         search_area=15,
                         drag_and_drop=False,
+                        dlt_estimate=False,
                         debug_level=debug_level,
                     )
                 else:
@@ -190,6 +193,7 @@ def calibrate_cbct(
                         pixel_spacing=[0.388, 0.388],
                         search_area=15,
                         drag_and_drop=True,
+                        dlt_estimate=False,
                         debug_level=debug_level,
                     )
 
@@ -287,6 +291,8 @@ def calibrate_projection(
     sdd,
     gantry_angle,
     gantry_angle_offset=0,
+    out_of_plane_angle=0,
+    in_plane_angle=0,
     proj_offset=[0, 0],
     source_offset=[0, 0],
     isocenter=[0, 0, 0],
@@ -294,6 +300,7 @@ def calibrate_projection(
     pixel_spacing=[0.388, 0.388],
     search_area=7,
     drag_and_drop=True,
+    dlt_estimate=True,
     debug_level=0,
 ):
     """Calibration of a single projection.
@@ -335,20 +342,8 @@ def calibrate_projection(
     :return: dictionary with calibration results for current projection
     :rtype: dict
     """
-
     results = {}
 
-    # center_offset is the shift of the panel in half fan mode
-    ##if image_center is None:  # in case image_center is not declared
-    ##    image_center = [image_size[0] / 2, image_size[1] / 2 + center_offset]
-
-    # detector orientation (from panel to brandis reference - rotation along y)
-    # Notation "zxy" to avoid gimbal lock on y=90
-    # out_of_plane_angle is rotation around x
-    # in_plane_angle is rotation around z
-
-    out_of_plane_angle = 0
-    in_plane_angle = 0
     detector_orientation = np.deg2rad(
         np.array(
             [
@@ -358,6 +353,14 @@ def calibrate_projection(
             ]
         )
     )
+
+    # Boundaries
+    # TODO tolerance limits set by user
+    angle_limit = np.deg2rad(1)  # rad
+    # gantry_angle_limit = np.deg2rad(0.5)  # rad
+    # distance_limit = 3  # mm
+    offset_limit = 20  # mm
+    # offset_limit = 0.20  # percentage
 
     # Load projection
     if ".raw" in projection_file:
@@ -392,10 +395,10 @@ def calibrate_projection(
             grayscale_range=grayscale_range,
         )
 
-    # Starting from the updated coordinates, define a search area around them
-    # and identify the bbs as black pixels inside these areas (brandis are used
-    # as probes)
-    if drag_and_drop is True:
+        # Starting from the updated coordinates, define a search area around them
+        # and identify the bbs as black pixels inside these areas (brandis are used
+        # as probes)
+
         # bbs_centroid, dlt_weights = search_bbs_centroids(
         bbs_centroid = search_bbs_centroids(
             img=img,
@@ -416,7 +419,7 @@ def calibrate_projection(
             debug_level=debug_level,
         )
 
-    # Calibration - non linear data fitting optimization problem
+    # Extract only reliable centroids
     good_bbs_index = np.where(~np.isnan(bbs_centroid[:, 0]))[0]
 
     # Estimated BBs - consider only good bbs
@@ -425,166 +428,107 @@ def calibrate_projection(
     # Real Brandis BBs (skip BBs 3D that don't have a corresponding BBs 2D)
     bbs_3d = bbs_3d[good_bbs_index, :]
 
-    # Compute DLT to find projection matrix
-    dlt_camera_matrix, dlt_err = DLTcalib(
-        nd=3, xyz=bbs_3d, uv=bbs_2d_init, weights=None, uv_ref=None
-    )
-    """
-    dlt_camera_matrix, dlt_err, dlt_err_gt_init, dlt_err_gt_final = DLTcalib(
-        nd=3, xyz=bbs_3d, uv=bbs_2d_init, weights=dlt_weights, uv_ref=bbs_2d
-    )
-    """
-
-    # dlt_camera_matrix, dlt_err = DLTcalib(3, bbs_3d, bbs_2d)  # Just for tests
-
-    parameters = decompose_camera_matrix(
-        dlt_camera_matrix, image_size, pixel_spacing
-    )
-
-    if debug_level > 0:
-        print("\n..........DLT..........")
-        print(f"Error: {dlt_err}\n")
-
-        print(f"sid:       {parameters[0]:>15.3f}")
-        print(f"sdd:       {parameters[1]:>15.3f}")
-        print(
-            f"AngleX:    {parameters[2]:>15.3f} rad -> {np.rad2deg(parameters[2]):>8.3f} deg"
+    if dlt_estimate is True:
+        # Compute DLT to find a starting guess for projection matrix
+        dlt_camera_matrix, dlt_err = DLTcalib(
+            nd=3, xyz=bbs_3d, uv=bbs_2d_init, weights=None, uv_ref=None
         )
-        print(
-            f"AngleY:    {parameters[3]:>15.3f} rad -> {np.rad2deg(parameters[3]):>8.3f} deg"
+
+        dlt_parameters = decompose_camera_matrix(
+            dlt_camera_matrix, image_size, pixel_spacing
         )
-        print(
-            f"AngleZ:    {parameters[4]:>15.3f} rad -> {np.rad2deg(parameters[4]):>8.3f} deg"
-        )
-        print(f"P offset X:{parameters[5]:>15.3f}")
-        print(f"P offset Y:{parameters[6]:>15.3f}")
-        print(f"S offset X:{parameters[7]:>15.3f}")
-        print(f"S offset Y:{parameters[8]:>15.3f}")
-        print(".......................")
 
-    refine = True
-    if refine is True:
-        ###### LM refining ######
-        refine_parameters = []
-        # refine_parameters.append(parameters[0])  # sid
-        # refine_parameters.append(parameters[1])  # sdd
-        refine_parameters.append(parameters[2])  # oa
-        # refine_parameters.append(parameters[3])  # ga
-        refine_parameters.append(parameters[4])  # ia
-        refine_parameters.append(parameters[5])  # px
-        refine_parameters.append(parameters[6])  # py
-        refine_parameters.append(parameters[7])  # sx
-        refine_parameters.append(parameters[8])  # sy
+        if debug_level > 0:
+            print("\n..........DLT..........")
+            print(f"Error: {dlt_err}\n")
 
-        # print("xxxxxxxxxxxxxx")
-        # print(refine_parameters)
-        # print("xxxxxxxxxxxxxx")
-
-        # Boundaries
-        # TODO tolerance limits set by user
-        angle_limit = np.deg2rad(0.2)  # rad
-        gantry_angle_limit = np.deg2rad(0.2)  # rad
-        distance_limit = 3  # mm
-        offset_limit = 30  # mm
-
-        low_bound = []
-        # low_bound.append(parameters[0] - distance_limit)  # sid
-        # low_bound.append(parameters[1] - distance_limit)  # sdd
-        low_bound.append(parameters[2] - angle_limit)  # oa
-        # low_bound.append(parameters[3] - angle_limit)  # ga
-        low_bound.append(parameters[4] - gantry_angle_limit)  # ia
-        low_bound.append(parameters[5] - offset_limit)  # px
-        low_bound.append(parameters[6] - offset_limit)  # py
-        low_bound.append(parameters[7] - offset_limit)  # sx
-        low_bound.append(parameters[8] - offset_limit)  # sy
-
-        up_bound = []
-        # up_bound.append(parameters[0] + distance_limit)  # sid
-        # up_bound.append(parameters[1] + distance_limit)  # sdd
-        up_bound.append(parameters[2] + angle_limit)  # oa
-        # up_bound.append(parameters[3] + angle_limit)  # ga
-        up_bound.append(parameters[4] + gantry_angle_limit)  # ia
-        up_bound.append(parameters[5] + offset_limit)  # px
-        up_bound.append(parameters[6] + offset_limit)  # py
-        up_bound.append(parameters[7] + offset_limit)  # sx
-        up_bound.append(parameters[8] + offset_limit)  # sy
-
-        if good_bbs_index.shape[0] >= len(parameters):  # at least 9 BBs
-            solution = least_squares(
-                fun=calibration_cost_function,
-                x0=refine_parameters,
-                args=(
-                    bbs_3d,
-                    bbs_2d_init,
-                    pixel_spacing,
-                    isocenter,
-                    image_size,
-                    sid,
-                    sdd,
-                    detector_orientation[2],
-                ),
-                method="trf",
-                # method="lm",
-                bounds=(low_bound, up_bound),
-                # verbose=1,
+            print(f"sid:       {dlt_parameters['sid']:>15.3f}")
+            print(f"sdd:       {dlt_parameters['sdd']:>15.3f}")
+            print(
+                f"AngleX:    {dlt_parameters['oa']:>15.3f} rad -> {np.rad2deg(dlt_parameters['oa']):>8.3f} deg"
             )
-        else:
-            logging.error(
-                f"""Cannot properly process projection at angle {gantry_angle}.\nPlease acquire again calibration phantom and then retry."""
+            print(
+                f"AngleY:    {dlt_parameters['ga']:>15.3f} rad -> {np.rad2deg(dlt_parameters['ga']):>8.3f} deg"
             )
-            sys.exit(1)
+            print(
+                f"AngleZ:    {dlt_parameters['ia']:>15.3f} rad -> {np.rad2deg(dlt_parameters['ia']):>8.3f} deg"
+            )
+            print(f"P offset X:{dlt_parameters['px']:>15.3f}")
+            print(f"P offset Y:{dlt_parameters['py']:>15.3f}")
+            print(f"S offset X:{dlt_parameters['sx']:>15.3f}")
+            print(f"S offset Y:{dlt_parameters['sy']:>15.3f}")
+            print(".......................")
 
-        # Solution found
-        solution = solution.x
-        """
-        # [sid, sdd, oa, ga, ia, px, py, sx, sy]
-        parameters = []
-        parameters.append(solution[0])
-        parameters.append(solution[1])
-        parameters.append(solution[2])
-        parameters.append(solution[3])
-        parameters.append(solution[4])
-        parameters.append(solution[5])
-        parameters.append(solution[6])
-        parameters.append(solution[7])
-        parameters.append(solution[8])
-        
-        # [oa, ga, ia, px, py, sx, sy]
-        parameters = []
-        parameters.append(sid)
-        parameters.append(sdd)
-        parameters.append(solution[0])
-        parameters.append(solution[1])
-        parameters.append(solution[2])
-        parameters.append(solution[3])
-        parameters.append(solution[4])
-        parameters.append(solution[5])
-        parameters.append(solution[6])
-        """
-        # [oa, ia, px, py, sx, sy]
-        parameters = []
-        parameters.append(sid)
-        parameters.append(sdd)
-        parameters.append(solution[0])
-        parameters.append(detector_orientation[2])
-        parameters.append(solution[1])
-        parameters.append(solution[2])
-        parameters.append(solution[3])
-        parameters.append(solution[4])
-        parameters.append(solution[5])
+        # Force sid, sdd and ga to have nominal value
+        dlt_parameters["sid"] = sid
+        dlt_parameters["sdd"] = sdd
+        dlt_parameters["ga"] = detector_orientation[2]
+
+        starting_guess = define_ls_parameters(
+            dlt_parameters, angle_limit=angle_limit, offset_limit=offset_limit
+        )
+    else:
+        # No DLT, solve problem starting from input parameters
+        parameters = {
+            "sid": sid,
+            "sdd": sdd,
+            "ia": detector_orientation[0],
+            "oa": detector_orientation[1],
+            "ga": detector_orientation[2],
+            "px": proj_offset[0],
+            "py": proj_offset[1],
+            "sx": source_offset[0],
+            "sy": source_offset[1],
+        }
+        starting_guess = define_ls_parameters(
+            parameters, angle_limit=angle_limit, offset_limit=offset_limit
+        )
+
+    # Solve minimization problem
+    if good_bbs_index.shape[0] >= 10:  # at least 10 BBs
+        minimizer_results = minimize(
+            fcn=compute_bbs_residuals,
+            params=starting_guess,
+            # method="tnc",
+            method="cobyla",  # seems to be faster than tnc
+            args=(bbs_3d, bbs_2d_init, pixel_spacing, isocenter, image_size),
+            scale_covar=True,
+            calc_covar=True,
+            # max_nfev=10000,
+        )
+        # debug_level 1
+        print("\n-------------------------------")
+        # print("Parameter    Value       Stderr")
+        # for name, param in minimizer_results.params.items():
+        #    print(
+        #        "{:7s} {:11.5f} +/-{:11.5f}".format(
+        #            name, param.value, param.stderr
+        #        )
+        #    )
+        # debug_level 2
+        print(fit_report(minimizer_results, show_correl=False, sort_pars=False))
+    else:
+        logging.error(
+            f"""Cannot properly process projection at angle {gantry_angle}.\nPlease acquire again calibration phantom and then retry."""
+        )
+        sys.exit(1)
+
+    # Solution found
+    # [sid, sdd, oa, ga, ia, px, py, sx, sy]
+    parameters = minimizer_results.params.valuesdict()
 
     # Extract explicitly new parameters from solution
     # Remember: solution has this structure
     # [sid, sdd, oa, ga, ia, px, py, sx, sy]
-    sid_new = parameters[0]
-    sdd_new = parameters[1]
+    sid_new = parameters["sid"]
+    sdd_new = parameters["sdd"]
 
     # Remember: "ZXY" convention
     detector_orientation_new = np.array(
-        [parameters[4], parameters[2], parameters[3]]
+        [parameters["ia"], parameters["oa"], parameters["ga"]]
     )
-    proj_offset_new = np.array([parameters[5], parameters[6]])
-    source_offset_new = np.array([parameters[7], parameters[8]])
+    proj_offset_new = np.array([parameters["px"], parameters["py"]])
+    source_offset_new = np.array([parameters["sx"], parameters["sy"]])
 
     # New center of image
     image_center_new = (source_offset_new - proj_offset_new) / np.array(
@@ -592,7 +536,7 @@ def calibrate_projection(
     ) + np.array(image_size) / 2
     isocenter_new = isocenter
 
-    #### Just to check reprojection ####
+    # Check projection results
     # Project points based on calibration - use new detector orientation,
     # tube and panel position
     proj_matrix_new = create_camera_matrix(
@@ -611,25 +555,25 @@ def calibrate_projection(
     )
 
     ls_err = np.mean(np.sqrt(np.sum((bbs_2d_init - bbs_2d_final) ** 2, 1)))
-
-    if (refine is True) and (debug_level > 0):
+    print(f"*** Error: {ls_err} ***")
+    if debug_level > 0:
         print("..........LS...........")
         print(f"Error: {ls_err}\n")
-        print(f"sid:       {parameters[0]:>15.3f}")
-        print(f"sdd:       {parameters[1]:>15.3f}")
+        print(f"sid:       {parameters['sid']:>15.3f}")
+        print(f"sdd:       {parameters['sdd']:>15.3f}")
         print(
-            f"AngleX:    {parameters[2]:>15.3f} rad -> {np.rad2deg(parameters[2]):>8.3f} deg"
+            f"AngleX:    {parameters['oa']:>15.3f} rad -> {np.rad2deg(parameters['oa']):>8.3f} deg"
         )
         print(
-            f"AngleY:    {parameters[3]:>15.3f} rad -> {np.rad2deg(parameters[3]):>8.3f} deg"
+            f"AngleY:    {parameters['ga']:>15.3f} rad -> {np.rad2deg(parameters['ga']):>8.3f} deg"
         )
         print(
-            f"AngleZ:    {parameters[4]:>15.3f} rad -> {np.rad2deg(parameters[4]):>8.3f} deg"
+            f"AngleZ:    {parameters['ia']:>15.3f} rad -> {np.rad2deg(parameters['ia']):>8.3f} deg"
         )
-        print(f"P offset X:{parameters[5]:>15.3f}")
-        print(f"P offset Y:{parameters[6]:>15.3f}")
-        print(f"S offset X:{parameters[7]:>15.3f}")
-        print(f"S offset Y:{parameters[8]:>15.3f}")
+        print(f"P offset X:{parameters['px']:>15.3f}")
+        print(f"P offset Y:{parameters['py']:>15.3f}")
+        print(f"S offset X:{parameters['sx']:>15.3f}")
+        print(f"S offset Y:{parameters['sy']:>15.3f}")
         print(".......................")
 
     if debug_level >= 1:
@@ -674,11 +618,6 @@ def calibrate_projection(
         )
 
         plt.show()
-
-    if refine is False:
-        error = dlt_err  # _gt_final
-    else:
-        error = ls_err
 
     # calculate new source/panel position
     R_new_base = R.from_euler("zxy", detector_orientation_new).as_matrix()
@@ -748,21 +687,13 @@ def calibrate_projection(
     results["image_center"] = image_center_new
     results["detector_rot_matrix"] = R_new_base
     results["panel_offset"] = panel_new.flatten()  # _offset_new.flatten()
-    results["error"] = error
+    results["error"] = ls_err
 
     return results
 
 
-def calibration_cost_function(
-    param,
-    bbs_3d,
-    bbs_2d,
-    pixel_spacing,
-    isocenter,
-    image_size,
-    sid,
-    sdd,
-    gantry_angle,
+def compute_bbs_residuals(
+    params, bbs_3d, bbs_2d, pixel_spacing, isocenter, image_size,
 ):
     """Cost Function for calibration optimizers.
 
@@ -780,26 +711,13 @@ def calibration_cost_function(
     :rtype: float
     """
     # unknown
-    """
-    ### Ottimizza tutto
     # parameters = [sid, sdd, oa, ga, ia, px, py, sx, sy]
-    sid = np.array(param[0])
-    sdd = np.array(param[1])
-    detector_orientation = np.array([param[4], param[2], param[3]])
-    proj_offset = np.array([param[5], param[6]])
-    source_offset = np.array([param[7], param[8]])
-    
-    # Tutto tranne sid, sdd
-    # parameters = [oa, ga, ia, px, py, sx, sy]
-    detector_orientation = np.array([param[2], param[0], param[1]])
-    proj_offset = np.array([param[3], param[4]])
-    source_offset = np.array([param[5], param[6]])
-    """
-    # Tutto tranne sid, sdd, gantry angle
-    # parameters = [oa, ia, px, py, sx, sy]
-    detector_orientation = np.array([param[1], param[0], gantry_angle])
-    proj_offset = np.array([param[2], param[3]])
-    source_offset = np.array([param[4], param[5]])
+    params = params.valuesdict()
+    sid = np.array(params["sid"])
+    sdd = np.array(params["sdd"])
+    detector_orientation = np.array([params["ia"], params["oa"], params["ga"]])
+    proj_offset = np.array([params["px"], params["py"]])
+    source_offset = np.array([params["sx"], params["sy"]])
 
     proj_matrix = create_camera_matrix(
         detector_orientation,
@@ -814,26 +732,61 @@ def calibration_cost_function(
     # Reprojected 2D points
     r2d = project_camera_matrix(bbs_3d, proj_matrix, image_size)
 
-    # delta = r2d - bbs_2d  # Error
-    # diff = np.sqrt(np.square(delta[:, 0]) + np.square(delta[:, 1]))
-
     # Mean distance:
-    # for a, b in zip(bbs_2d, r2d):
-    #    print(f"Valori: {a} - {b}")
-    # print(f"Diff: {bbs_2d - r2d}")
-    # print(f"Squared: {(bbs_2d - r2d)**2}")
-    # print(f"SOS: {np.sum((bbs_2d - r2d) ** 2, 1)}")
-    # print(f"SQRT: {np.sqrt(np.sum((bbs_2d - r2d) ** 2, 1))}")
-    # print(f"Mean: {np.mean(np.sqrt(np.sum((bbs_2d - r2d) ** 2, 1)))}")
-
-    # err = np.mean(np.sqrt(np.sum((bbs_2d - r2d) ** 2, 1)))
     err = np.sqrt(np.sum((bbs_2d - r2d) ** 2, 1))
-    # print(f"Err: {err}")
-    # print(f"Cost: {(err).sum()}")
-    # input()
-    # err = np.sqrt(np.sum((bbs_2d - r2d) ** 2, 1))
 
     return err
+
+
+def define_ls_parameters(parameters, angle_limit, offset_limit):
+    ls_parameters = Parameters()
+    ls_parameters.add(name="sid", value=parameters["sid"], vary=False)
+    ls_parameters.add(name="sdd", value=parameters["sdd"], vary=False)
+    ls_parameters.add(
+        name="oa",
+        value=parameters["oa"],
+        vary=True,
+        min=parameters["oa"] - angle_limit,
+        max=parameters["oa"] + angle_limit,
+    )
+    ls_parameters.add(name="ga", value=parameters["ga"], vary=False)
+    ls_parameters.add(
+        name="ia",
+        value=parameters["ia"],
+        vary=True,
+        min=parameters["ia"] - angle_limit,
+        max=parameters["ia"] + angle_limit,
+    )
+    ls_parameters.add(
+        name="px",
+        value=parameters["px"],
+        vary=True,
+        min=parameters["px"] - offset_limit,
+        max=parameters["px"] + offset_limit,
+    )
+    ls_parameters.add(
+        name="py",
+        value=parameters["py"],
+        vary=True,
+        min=parameters["py"] - offset_limit,
+        max=parameters["py"] + offset_limit,
+    )
+    ls_parameters.add(
+        name="sx",
+        value=parameters["sx"],
+        vary=True,
+        min=parameters["sx"] - offset_limit,
+        max=parameters["sx"] + offset_limit,
+    )
+    ls_parameters.add(
+        name="sy",
+        value=parameters["sy"],
+        vary=True,
+        min=parameters["sy"] - offset_limit,
+        max=parameters["sy"] + offset_limit,
+    )
+
+    return ls_parameters
 
 
 def initialize_results():
@@ -988,6 +941,35 @@ def plot_calibration_errors(calib_results):
     )
 
     plt.hlines(y=1, xmin=0, xmax=len(errors))
+
+    plt.show()
+
+
+def plot_offset_variability(calib_results):
+    p_off = np.array(calib_results["proj_offset"])
+    s_off = np.array(calib_results["source_offset"])
+
+    def on_key_pressed(event):
+        if event.key == "enter":
+            plt.close()
+
+    fig, axes = plt.subplots(ncols=2, figsize=(10, 5))
+    fig.canvas.mpl_connect("key_press_event", on_key_pressed)
+
+    ax = axes.ravel()
+    ax[0] = plt.subplot(1, 2, 1)
+    ax[1] = plt.subplot(1, 2, 2)
+
+    ax[0].plot(p_off[:, 0], c="r", label="Proj Offset X")
+    ax[0].plot(p_off[:, 1], c="b", label="Proj Offset Y")
+    ax[0].plot(s_off[:, 0], c="g", label="Proj Offset X")
+    ax[0].plot(s_off[:, 1], c="m", label="Proj Offset Y")
+    ax[0].legend()
+
+    ax[1].boxplot(
+        [p_off[:, 0], p_off[:, 1], s_off[:, 0], s_off[:, 1]],
+        labels=["pX", "pY", "sX", "sY"],
+    )
 
     plt.show()
 

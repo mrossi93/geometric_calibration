@@ -190,7 +190,17 @@ def decompose_camera_matrix(L, image_size, pixel_spacing):
     py = sy + (image_size[1] / 2 * pixel_spacing[1]) - yp * pixel_spacing[1]
 
     # Return parameters list
-    parameters = [sid, sdd, -oa, -ga, -ia, px, py, sx, sy]
+    parameters = {
+        "sid": sid,
+        "sdd": sdd,
+        "oa": -oa,
+        "ga": -ga,
+        "ia": -ia,
+        "px": px,
+        "py": py,
+        "sx": sx,
+        "sy": sy,
+    }
 
     return parameters
 
