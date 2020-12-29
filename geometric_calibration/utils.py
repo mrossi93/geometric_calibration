@@ -9,16 +9,43 @@ from skimage.exposure import histogram
 from skimage.filters import threshold_otsu
 from skimage.measure import regionprops
 
+from skimage import exposure
 from skimage.feature import canny
-from skimage.transform import hough_ellipse
-from skimage import data, color
+from skimage import color
 from skimage.util import img_as_ubyte
 from skimage.transform import hough_circle, hough_circle_peaks
 from skimage.draw import circle_perimeter
+import cv2
 
 from scipy.spatial.transform import Rotation as R
 
 # matplotlib.rcParams["toolbar"] = "None"
+
+
+def plot_img_and_hist(image, axes, bins=256):
+    """Plot an image along with its histogram and cumulative histogram.
+
+    """
+    ax_img, ax_hist = axes
+    ax_cdf = ax_hist.twinx()
+
+    # Display image
+    ax_img.imshow(image, cmap=plt.cm.gray)
+    ax_img.set_axis_off()
+
+    # Display histogram
+    ax_hist.hist(image.ravel(), bins=bins, histtype="step", color="black")
+    ax_hist.ticklabel_format(axis="y", style="scientific", scilimits=(0, 0))
+    ax_hist.set_xlabel("Pixel intensity")
+    ax_hist.set_xlim(0, 1)
+    ax_hist.set_yticks([])
+
+    # Display cumulative distribution
+    img_cdf, bins = exposure.cumulative_distribution(image, bins)
+    ax_cdf.plot(bins, img_cdf, "r")
+    ax_cdf.set_yticks([])
+
+    return ax_img, ax_hist, ax_cdf
 
 
 class DraggablePoints:
@@ -154,7 +181,7 @@ class DraggablePoints:
         return np.array([a.center for a in self.artists])
 
 
-def drag_and_drop_bbs(projection, bbs_projected, grayscale_range):
+def drag_and_drop_bbs(projection, bbs_projected):
     """Drag&Drop Routines for bbs position's correction.
 
     :param projection_path: Path to the projection .raw file
@@ -172,12 +199,7 @@ def drag_and_drop_bbs(projection, bbs_projected, grayscale_range):
     ax = fig.add_subplot(111)
 
     # Reference image in background (must stay in position always)
-    ax.imshow(
-        projection,
-        cmap="gray",
-        vmin=grayscale_range[0],
-        vmax=grayscale_range[1],
-    )
+    ax.imshow(projection, cmap="gray")
 
     # Drag&Drop
     pts = []
@@ -186,21 +208,12 @@ def drag_and_drop_bbs(projection, bbs_projected, grayscale_range):
         pts.append(point)
         ax.add_patch(point)
 
-    # Append also an invisible point to update also image_center coordinates
-    ##point = patches.Circle(
-    ##    (image_center[0], image_center[1]), fc="r", alpha=0.5
-    ##)
-    ##pts.append(point)
-
     r2d_corrected = DraggablePoints(pts)
 
-    # remember that last coordinate is image_center
-    return r2d_corrected.final_coord  # [:-1], r2d_corrected.final_coord[-1]
+    return r2d_corrected.final_coord
 
 
-def search_bbs_centroids(
-    img, ref_2d, search_area, image_size, grayscale_range, debug_level=0
-):
+def search_bbs_centroids(img, ref_2d, search_area, image_size, debug_level=0):
     """Search bbs based on projection.
 
     Starting from the updated coordinates, define a search area around them
@@ -234,17 +247,16 @@ def search_bbs_centroids(
             plt.close()
 
     bbs_centroid = []
-    weights = []
     for curr_point in ref_2d:  # for each bbs
-        ind_row = round(curr_point[0])
-        ind_col = round(curr_point[1])
+        ind_col = round(curr_point[0])
+        ind_row = round(curr_point[1])
 
         # if bbs is not even inside the image, skip it
         if (
             (ind_row < 0)
             or (ind_col < 0)
-            or (ind_row > image_size[0])
-            or (ind_col > image_size[1])
+            or (ind_row > image_size[1])
+            or (ind_col > image_size[0])
         ):
             bbs_centroid.append([np.nan, np.nan])
             if debug_level >= 1:
@@ -252,18 +264,22 @@ def search_bbs_centroids(
             continue
 
         # define the field of research
-        min_row = int(max([0, ind_row - search_area]))
         min_col = int(max([0, ind_col - search_area]))
-        max_row = int(min([ind_row + search_area, image_size[0]]))
-        max_col = int(min([ind_col + search_area, image_size[1]]))
+        min_row = int(max([0, ind_row - search_area]))
+
+        max_col = int(min([ind_col + search_area, image_size[0]]))
+        max_row = int(min([ind_row + search_area, image_size[1]]))
 
         # define a mask on the original image to underline field of research
-        sub_img = img[min_col:max_col, min_row:max_row]
+        # sub_img_org = img[min_row:max_row, min_col:max_col]
+        sub_img = img[min_row:max_row, min_col:max_col]
 
-        # rescale grey level of the sub-image
-        sub_img = adjust_image(sub_img, grayscale_range)
+        # Contrast stretching
+        # TODO Valutare se rimuovere, in alcuni casi da problemi
+        # p1, p2 = np.percentile(sub_img_org, (1, 60))
+        # sub_img = exposure.rescale_intensity(sub_img_org, in_range=(p1, p2))
 
-        edges = canny(sub_img, sigma=2,)
+        edges = canny(sub_img, sigma=2)
 
         # Radii to be detected
         # hough_radii = np.arange(3, 10)
@@ -282,7 +298,6 @@ def search_bbs_centroids(
             hough_radii,
             min_xdistance=0,
             min_ydistance=0,
-            # threshold=0.4,
             num_peaks=1,
             total_num_peaks=1,
         )
@@ -293,15 +308,22 @@ def search_bbs_centroids(
             print(f"Radius: {radii}")
             print("---------")
 
-        if accums[0] < 0.50:
+        if len(accums) == 0:
             if debug_level >= 1:
-                print("Image is not clear")
+                print("BB discarded: no circle found")
+            cx = np.array([0])
+            cy = np.array([0])
+            radii = np.array([0])
+            bbs_centroid.append([np.nan, np.nan])
+        elif accums[0] < 0.50:
+            if debug_level >= 1:
+                print("BB discarded: image is not sufficiently clear")
             cx[0] = 0
             cy[0] = 0
             radii[0] = 0
             bbs_centroid.append([np.nan, np.nan])
         else:
-            bbs_centroid.append([min_row + cx[0], min_col + cy[0]])
+            bbs_centroid.append([min_col + cx[0], min_row + cy[0]])
 
         edges = color.gray2rgb(img_as_ubyte(edges))
 
@@ -317,45 +339,6 @@ def search_bbs_centroids(
             edges[cy, cx] = (250, 0, 0)
             edges[circy, circx] = (250, 0, 0)
 
-        """
-        # Binarize sub_image to extract the bbs
-        try:
-            thresh = threshold_otsu(sub_img, nbins=bins)
-        except Exception:
-            # we are finished in a total white window, otsu thresholding needs
-            # at least two level of gray to work
-            # bbs_centroid.append([np.nan, np.nan])
-            if debug_level >= 1:
-                print("Monochromatic window")
-            continue
-        binary = sub_img > thresh
-
-        # Extract centroid from thresholded sub_image
-        labeled_foreground = (sub_img < thresh).astype(int)
-        properties = regionprops(labeled_foreground, sub_img)
-
-        centroid = properties[0].centroid
-        theta = properties[0].orientation
-        major_axis = properties[0].major_axis_length
-        minor_axis = properties[0].minor_axis_length
-        
-        # Compute centroid weights
-        curr_weights = np.zeros([2, 2])
-        curr_weights[0, 0] = 1 / (major_axis + 1e-8)  # / 3)
-        # curr_weights[1, 1] = 1 / (minor_axis / 3)
-        curr_weights[1, 1] = 1 / (major_axis + 1e-8)  # / 3)
-        curr_weights = np.dot(
-            curr_weights,
-            np.array(
-                [
-                    [np.cos(theta), -np.sin(theta)],
-                    [np.sin(theta), np.cos(theta)],
-                ]
-            ),
-        )
-
-        weights.append(curr_weights)
-        """
         if debug_level == 2:
             fig, axes = plt.subplots(ncols=3, figsize=(8, 2.5))
             fig.canvas.mpl_connect("key_press_event", on_key_pressed)
@@ -365,39 +348,16 @@ def search_bbs_centroids(
             ax[1] = plt.subplot(1, 3, 2)
             ax[2] = plt.subplot(1, 3, 3)
 
-            ax[0].imshow(
-                sub_img,
-                cmap="gray",
-                vmin=grayscale_range[0],
-                vmax=grayscale_range[1],
-            )
+            ax[0].imshow(sub_img, cmap="gray")
             ax[0].set_title("Original")
 
             ax[1].set_title("Edges")
             ax[1].imshow(edges)
 
             ax[2].set_title("Centroid Found")
-            ax[2].imshow(
-                sub_img,
-                cmap="gray",
-                vmin=grayscale_range[0],
-                vmax=grayscale_range[1],
-            )
+            ax[2].imshow(sub_img, cmap="gray")
 
             ax[2].imshow(sub_img_cont, alpha=0.5)
-
-            """
-            x0 = centroid[1]
-            y0 = centroid[0]
-            x1 = x0 + np.cos(theta) * 0.5 * major_axis
-            y1 = y0 - np.sin(theta) * 0.5 * major_axis
-            x2 = x0 + np.sin(theta) * 0.5 * minor_axis
-            y2 = y0 + np.cos(theta) * 0.5 * minor_axis
-
-            ax[2].plot((x0, x1), (y0, y1), "-b", linewidth=2.5)
-            ax[2].plot((x0, x2), (y0, y2), "-r", linewidth=2.5)
-            ax[2].plot(x0, y0, ".g", markersize=15)
-            """
 
             plt.show()
 
@@ -414,9 +374,7 @@ def search_bbs_centroids(
         fig, ax = plt.subplots()
         fig.canvas.mpl_connect("key_press_event", on_key_pressed)
 
-        ax.imshow(
-            img, cmap="gray", vmin=grayscale_range[0], vmax=grayscale_range[1],
-        )
+        ax.imshow(img, cmap="gray")
         ax.scatter(
             bbs_dbg[:, 0], bbs_dbg[:, 1], marker="x", c="g"
         )  # , alpha=0.5)
@@ -730,7 +688,7 @@ def create_camera_matrix(
     """Generate projection matrix starting from extrinsic and intrinsic
     parameters (according to the rules of creation of a projection matrix)
     MODIFIED BY GABRIELE BELOTTI
-    
+
     :param panel_orientation: Array nx3 containing rotations of the image's
      plane [rot_x, rot_y, rot_z]
     :type panel_orientation: numpy.array

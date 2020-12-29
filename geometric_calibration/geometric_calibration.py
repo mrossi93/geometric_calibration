@@ -1,17 +1,21 @@
 """Main module."""
 
-import time
 import os
 import logging
 import sys
 from datetime import datetime
 import configparser
-import numpy as np
-from scipy.optimize import least_squares
-from lmfit import Parameters, minimize, fit_report
 import click
-import matplotlib.pyplot as plt
+import pickle
+
+import numpy as np
+from lmfit import Parameters, minimize, fit_report
+
 from scipy.spatial.transform import Rotation as R
+from scipy.signal import savgol_filter
+from skimage import exposure
+
+import matplotlib.pyplot as plt
 
 from geometric_calibration.reader import (
     read_img_label_file,
@@ -20,7 +24,6 @@ from geometric_calibration.reader import (
 )
 
 from geometric_calibration.utils import (
-    get_grayscale_range,
     create_camera_matrix,
     project_camera_matrix,
     drag_and_drop_bbs,
@@ -57,7 +60,7 @@ def calibrate_cbct(
     """
     # RCS: room coordinate system
     # A: isocenter
-    gantry_offset = 90  # 90 for room Sim, 0 for room 2
+    gantry_offset = 0  # 90 for room Sim, 0 for room 2
 
     # Read image labels
     logging.info("Reading imgLabels file...")
@@ -120,6 +123,12 @@ def calibrate_cbct(
 
     logging.info("Calibrating the system. Please Wait...")
 
+    # Boundaries
+    # TODO tolerance limits set by user
+    angle_limit = np.deg2rad(1)  # rad
+    distance_limit = 15  # mm
+    offset_limit = 30  # mm
+
     # Calibrate views
     with click.progressbar(
         iterable=range(len(gantry_angles)), fill_char="=", empty_char=" ",
@@ -147,6 +156,9 @@ def calibrate_cbct(
                     search_area=15,
                     drag_and_drop=True,
                     dlt_estimate=True,
+                    angle_limit=angle_limit,
+                    distance_limit=distance_limit,
+                    offset_limit=offset_limit,
                     debug_level=debug_level,
                 )
             # For every other projection, we can simpy use the results of
@@ -155,9 +167,21 @@ def calibrate_cbct(
                 # initialize geometry (based on previous optimization)
                 proj_offset = proj_results["proj_offset"]
                 source_offset = proj_results["source_offset"]
-                # image_center = view_results["image_center"]
+                # sid = proj_results["sid"]
+                # sdd = proj_results["sdd"]
 
                 if k % drag_every != 0:
+
+                    # After calibration of the first 10% projection, limits
+                    # can be constrained more since calibration is supposed
+                    # to be already at the convergence
+                    if k == 10:  # len(gantry_angles) * 0.1:
+                        # angle_limit = np.deg2rad(1)  # rad
+                        # distance_limit = 10  # distance_limit // 2  # mm
+                        # offset_limit = 30  # offset_limit // 2  # mm
+                        sid = proj_results["sid"]
+                        sdd = proj_results["sdd"]
+
                     # Calibrate other views without drag and drop procedure
                     proj_results = calibrate_projection(
                         projection_file=proj_path,
@@ -174,6 +198,9 @@ def calibrate_cbct(
                         search_area=15,
                         drag_and_drop=False,
                         dlt_estimate=False,
+                        angle_limit=angle_limit,
+                        distance_limit=distance_limit,
+                        offset_limit=offset_limit,
                         debug_level=debug_level,
                     )
                 else:
@@ -201,6 +228,13 @@ def calibrate_cbct(
             results = update_results(
                 global_res=results, proj_res=proj_results, proj_path=proj_path
             )
+    # TODO inserire lo smoothing dei risultati, per una calibrazione più
+    # stabile e "morbida"
+    temp_save_path = os.path.join(projection_dir, "results.pkl")
+
+    temp_save_file = open(temp_save_path, "wb")
+    pickle.dump(results, temp_save_file)
+    temp_save_file.close()
 
     return results
 
@@ -301,6 +335,9 @@ def calibrate_projection(
     search_area=7,
     drag_and_drop=True,
     dlt_estimate=True,
+    angle_limit=0.01745,  # rad -> 1°
+    distance_limit=10,  # mm
+    offset_limit=10,  # mm
     debug_level=0,
 ):
     """Calibration of a single projection.
@@ -354,19 +391,14 @@ def calibrate_projection(
         )
     )
 
-    # Boundaries
-    # TODO tolerance limits set by user
-    angle_limit = np.deg2rad(1)  # rad
-    # gantry_angle_limit = np.deg2rad(0.5)  # rad
-    # distance_limit = 3  # mm
-    offset_limit = 20  # mm
-    # offset_limit = 0.20  # percentage
-
     # Load projection
     if ".raw" in projection_file:
         img = read_projection_raw(projection_file, image_size)
     elif ".hnc" in projection_file:
         img = read_projection_hnc(projection_file, image_size)
+
+    # Equalization
+    img = exposure.equalize_hist(img)
 
     # Project points starting from extrinsic and intrinsic parameters
     # generate proj_matrix (extrinsic and intrinsic parameters)
@@ -376,7 +408,7 @@ def calibrate_projection(
         sid=sid,
         pixel_spacing=pixel_spacing,
         isocenter=isocenter,
-        proj_offset=proj_offset,  # [10, 20],  #
+        proj_offset=proj_offset,  # [5, 10],  #
         source_offset=source_offset,  # [30, 40],  #
         image_size=image_size,
     )
@@ -385,19 +417,15 @@ def calibrate_projection(
     # 2d coordinates of reference points
     bbs_2d = project_camera_matrix(bbs_3d, proj_matrix, image_size)
 
-    grayscale_range = get_grayscale_range(img)
-
     if drag_and_drop is True:
         # Overlay reference bbs with projection
         bbs_2d_corrected = drag_and_drop_bbs(
-            projection=img,
-            bbs_projected=bbs_2d,
-            grayscale_range=grayscale_range,
+            projection=img, bbs_projected=bbs_2d,
         )
 
-        # Starting from the updated coordinates, define a search area around them
-        # and identify the bbs as black pixels inside these areas (brandis are used
-        # as probes)
+        # Starting from the updated coordinates, define a search area around
+        # them and identify the bbs as black pixels inside these areas (brandis
+        # are used as probes)
 
         # bbs_centroid, dlt_weights = search_bbs_centroids(
         bbs_centroid = search_bbs_centroids(
@@ -405,7 +433,6 @@ def calibrate_projection(
             ref_2d=bbs_2d_corrected,
             search_area=search_area,
             image_size=image_size,
-            grayscale_range=grayscale_range,
             debug_level=debug_level,
         )
     else:
@@ -415,7 +442,6 @@ def calibrate_projection(
             ref_2d=bbs_2d,
             search_area=search_area,
             image_size=image_size,
-            grayscale_range=grayscale_range,
             debug_level=debug_level,
         )
 
@@ -465,7 +491,10 @@ def calibrate_projection(
         dlt_parameters["ga"] = detector_orientation[2]
 
         starting_guess = define_ls_parameters(
-            dlt_parameters, angle_limit=angle_limit, offset_limit=offset_limit
+            dlt_parameters,
+            angle_limit=angle_limit,
+            offset_limit=offset_limit,
+            distance_limit=distance_limit,
         )
     else:
         # No DLT, solve problem starting from input parameters
@@ -481,10 +510,15 @@ def calibrate_projection(
             "sy": source_offset[1],
         }
         starting_guess = define_ls_parameters(
-            parameters, angle_limit=angle_limit, offset_limit=offset_limit
+            parameters,
+            angle_limit=angle_limit,
+            offset_limit=offset_limit,
+            distance_limit=distance_limit,
         )
 
     # Solve minimization problem
+    # TODO Capire qual è il reale minimo numero di punti per portare a termine
+    # la calibrazione
     if good_bbs_index.shape[0] >= 10:  # at least 10 BBs
         minimizer_results = minimize(
             fcn=compute_bbs_residuals,
@@ -494,6 +528,7 @@ def calibrate_projection(
             args=(bbs_3d, bbs_2d_init, pixel_spacing, isocenter, image_size),
             scale_covar=True,
             calc_covar=True,
+            # nan_policy="propagate"
             # max_nfev=10000,
         )
         # debug_level 1
@@ -531,8 +566,8 @@ def calibrate_projection(
     source_offset_new = np.array([parameters["sx"], parameters["sy"]])
 
     # New center of image
-    image_center_new = (source_offset_new - proj_offset_new) / np.array(
-        pixel_spacing
+    image_center_new = (
+        (source_offset_new - proj_offset_new) / np.array(pixel_spacing)
     ) + np.array(image_size) / 2
     isocenter_new = isocenter
 
@@ -587,9 +622,7 @@ def calibrate_projection(
         ax = fig.add_subplot(111)
 
         # Reference image in background (must stay in position always)
-        ax.imshow(
-            img, cmap="gray", vmin=grayscale_range[0], vmax=grayscale_range[1],
-        )
+        ax.imshow(img, cmap="gray")
 
         # Final Position
         ax.scatter(
@@ -620,39 +653,20 @@ def calibrate_projection(
         plt.show()
 
     # calculate new source/panel position
-    R_new_base = R.from_euler("zxy", detector_orientation_new).as_matrix()
+    R_new_base = R.from_euler("zxy", detector_orientation_new).as_matrix().T
 
     # Referred to isocenter
     R_new = np.matmul(
-        R_new_base.T, R.from_euler("zxy", [-90, 0, 0], degrees=True).as_matrix()
+        R_new_base, R.from_euler("zxy", [-90, 0, 0], degrees=True).as_matrix()
     )
 
     # source position (X-ray tube)
-    ##source_new = np.matmul(R_new, np.array([[0], [0], [sid_new]]))
     source_new = np.matmul(
         R_new_base,
         np.array([[source_offset_new[0]], [source_offset_new[1]], [-sid_new]]),
     )
 
     # panel position (center of panel)
-    # image_center_new_mm = image_center_new * pixel_spacing
-    ##image_center_new_mm = image_center_new * pixel_spacing
-
-    # panel_center_new = np.matmul(
-    #    R_new, np.array([0], [0], [sid_new - sdd_new]])
-    # )
-
-    # panel_new = np.matmul(
-    #    R_new,
-    #    np.array(
-    #        [
-    #            [image_center_new_mm[0]],
-    #            [image_center_new_mm[1]],
-    #            [sid_new - sdd_new],
-    #        ]
-    #    ),
-    # )
-
     panel_new = np.matmul(
         R_new_base,
         np.array(
@@ -738,10 +752,22 @@ def compute_bbs_residuals(
     return err
 
 
-def define_ls_parameters(parameters, angle_limit, offset_limit):
+def define_ls_parameters(parameters, angle_limit, offset_limit, distance_limit):
     ls_parameters = Parameters()
-    ls_parameters.add(name="sid", value=parameters["sid"], vary=False)
-    ls_parameters.add(name="sdd", value=parameters["sdd"], vary=False)
+    ls_parameters.add(
+        name="sid",
+        value=parameters["sid"],
+        vary=True,
+        min=parameters["sid"] - distance_limit,
+        max=parameters["sid"] + distance_limit,
+    )
+    ls_parameters.add(
+        name="sdd",
+        value=parameters["sdd"],
+        vary=True,
+        min=parameters["sdd"] - distance_limit,
+        max=parameters["sdd"] + distance_limit,
+    )
     ls_parameters.add(
         name="oa",
         value=parameters["oa"],
@@ -928,19 +954,22 @@ def plot_calibration_errors(calib_results):
             plt.close()
 
     # Plot panel and source positions (trajectory)
-    fig = plt.figure(num="Mean Reprojection Errors")
+    fig, axes = plt.subplots(ncols=2)
     fig.canvas.mpl_connect("key_press_event", on_key_pressed)
 
-    ax = fig.add_subplot(111)
+    ax = axes.ravel()
+    ax[0] = plt.subplot(1, 2, 1)
+    ax[1] = plt.subplot(1, 2, 2)
 
-    ax.scatter(
+    ax[0].scatter(
         range(len(errors)),
         errors[:],
         marker="."
         # label="Source Position",
     )
 
-    plt.hlines(y=1, xmin=0, xmax=len(errors))
+    ax[1].boxplot(errors)
+    # plt.hlines(y=1, xmin=0, xmax=len(errors))
 
     plt.show()
 
@@ -948,6 +977,11 @@ def plot_calibration_errors(calib_results):
 def plot_offset_variability(calib_results):
     p_off = np.array(calib_results["proj_offset"])
     s_off = np.array(calib_results["source_offset"])
+
+    px_smooth = savgol_filter(p_off[:, 0], 21, 3)
+    py_smooth = savgol_filter(p_off[:, 1], 21, 3)
+    sx_smooth = savgol_filter(s_off[:, 0], 21, 3)
+    sy_smooth = savgol_filter(s_off[:, 1], 21, 3)
 
     def on_key_pressed(event):
         if event.key == "enter":
@@ -961,14 +995,36 @@ def plot_offset_variability(calib_results):
     ax[1] = plt.subplot(1, 2, 2)
 
     ax[0].plot(p_off[:, 0], c="r", label="Proj Offset X")
+    ax[0].plot(px_smooth, c="r", label="Proj Offset X - smooth")
+
     ax[0].plot(p_off[:, 1], c="b", label="Proj Offset Y")
-    ax[0].plot(s_off[:, 0], c="g", label="Proj Offset X")
-    ax[0].plot(s_off[:, 1], c="m", label="Proj Offset Y")
+    ax[0].plot(py_smooth, c="b", label="Proj Offset Y - smooth")
+
+    ax[0].plot(s_off[:, 0], c="g", label="Source Offset X")
+    ax[0].plot(sx_smooth, c="g", label="Source Offset X - smooth")
+
+    ax[0].plot(s_off[:, 1], c="m", label="Source Offset Y")
+    ax[0].plot(sy_smooth, c="m", label="Source Offset Y - smooth")
+
     ax[0].legend()
 
+    # ax[0].hlines(np.mean(p_off[:, 0]), xmin=0, xmax=p_off.shape[0], colors="r")
+    # ax[0].hlines(np.mean(p_off[:, 1]), xmin=0, xmax=p_off.shape[0], colors="b")
+    # ax[0].hlines(np.mean(s_off[:, 0]), xmin=0, xmax=p_off.shape[0], colors="g")
+    # ax[0].hlines(np.mean(s_off[:, 1]), xmin=0, xmax=p_off.shape[0], colors="m")
+
     ax[1].boxplot(
-        [p_off[:, 0], p_off[:, 1], s_off[:, 0], s_off[:, 1]],
-        labels=["pX", "pY", "sX", "sY"],
+        [
+            p_off[:, 0],
+            px_smooth,
+            p_off[:, 1],
+            py_smooth,
+            s_off[:, 0],
+            sx_smooth,
+            s_off[:, 1],
+            sy_smooth,
+        ],
+        labels=["pX", "pXs", "pY", "pYs", "sX", "sXs", "sY", "sYs"],
     )
 
     plt.show()

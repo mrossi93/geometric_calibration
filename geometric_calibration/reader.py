@@ -68,6 +68,7 @@ def read_projection_raw(filename, dim):
     """
     image = np.fromfile(filename, dtype="uint16", sep="")
     image = np.reshape(image, newshape=[dim[0], dim[1]]).T
+
     return image
 
 
