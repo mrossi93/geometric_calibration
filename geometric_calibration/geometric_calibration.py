@@ -14,7 +14,7 @@ from lmfit import Parameters, minimize, fit_report
 from scipy.spatial.transform import Rotation as R
 from scipy.signal import savgol_filter
 from skimage import exposure
-
+import skimage  # Solo per esperimenti, poi da mettere solo gli import precisi
 import matplotlib.pyplot as plt
 
 from geometric_calibration.reader import (
@@ -27,7 +27,8 @@ from geometric_calibration.utils import (
     create_camera_matrix,
     project_camera_matrix,
     drag_and_drop_bbs,
-    search_bbs_centroids,
+    search_bbs_centroids_circles,
+    search_bbs_centroids_ellipse,
 )
 
 from geometric_calibration.dlt import DLTcalib, decompose_camera_matrix
@@ -60,7 +61,7 @@ def calibrate_cbct(
     """
     # RCS: room coordinate system
     # A: isocenter
-    gantry_offset = 0  # 90 for room Sim, 0 for room 2
+    gantry_offset = 90  # 90 for room Sim, 0 for room 2
 
     # Read image labels
     logging.info("Reading imgLabels file...")
@@ -125,9 +126,9 @@ def calibrate_cbct(
 
     # Boundaries
     # TODO tolerance limits set by user
-    angle_limit = np.deg2rad(1)  # rad
-    distance_limit = 15  # mm
-    offset_limit = 30  # mm
+    angle_tol = np.deg2rad(1)  # rad
+    distance_tol = 15  # mm
+    offset_tol = 40  # mm
 
     # Calibrate views
     with click.progressbar(
@@ -154,34 +155,32 @@ def calibrate_cbct(
                     image_size=[768, 1024],
                     pixel_spacing=[0.388, 0.388],
                     search_area=15,
+                    search_mode="ellipse",
                     drag_and_drop=True,
                     dlt_estimate=True,
-                    angle_limit=angle_limit,
-                    distance_limit=distance_limit,
-                    offset_limit=offset_limit,
+                    angle_tol=angle_tol,
+                    distance_tol=distance_tol,
+                    offset_tol=offset_tol,
                     debug_level=debug_level,
                 )
+                # TEST dopo la prima li inizializzo così, poi ogni tot aggiorno
+                #proj_offset = proj_results["proj_offset"]
+                #source_offset = proj_results["source_offset"]
+
             # For every other projection, we can simpy use the results of
             # previous view as a starting point, avoiding drag&drop
             else:
                 # initialize geometry (based on previous optimization)
                 proj_offset = proj_results["proj_offset"]
                 source_offset = proj_results["source_offset"]
-                # sid = proj_results["sid"]
-                # sdd = proj_results["sdd"]
 
                 if k % drag_every != 0:
-
-                    # After calibration of the first 10% projection, limits
-                    # can be constrained more since calibration is supposed
-                    # to be already at the convergence
-                    if k == 10:  # len(gantry_angles) * 0.1:
-                        # angle_limit = np.deg2rad(1)  # rad
-                        # distance_limit = 10  # distance_limit // 2  # mm
-                        # offset_limit = 30  # offset_limit // 2  # mm
-                        sid = proj_results["sid"]
-                        sdd = proj_results["sdd"]
-
+                    """
+                    if k == 1:
+                        # TEST: inizializzo sempre con i risultati della prima proiezione
+                        proj_offset = proj_results["proj_offset"]
+                        source_offset = proj_results["source_offset"]
+                    """
                     # Calibrate other views without drag and drop procedure
                     proj_results = calibrate_projection(
                         projection_file=proj_path,
@@ -196,16 +195,18 @@ def calibrate_cbct(
                         image_size=[768, 1024],
                         pixel_spacing=[0.388, 0.388],
                         search_area=15,
+                        search_mode="ellipse",
                         drag_and_drop=False,
                         dlt_estimate=False,
-                        angle_limit=angle_limit,
-                        distance_limit=distance_limit,
-                        offset_limit=offset_limit,
+                        angle_tol=angle_tol,
+                        distance_tol=distance_tol,
+                        offset_tol=offset_tol,
                         debug_level=debug_level,
                     )
                 else:
                     # if "drag-every" parameter is setted, calibration for the
                     # current view will be performed after drag&drop
+                    """
                     proj_results = calibrate_projection(
                         projection_file=proj_path,
                         bbs_3d=bbs_3d,
@@ -219,10 +220,15 @@ def calibrate_cbct(
                         image_size=[768, 1024],
                         pixel_spacing=[0.388, 0.388],
                         search_area=15,
-                        drag_and_drop=True,
-                        dlt_estimate=False,
-                        debug_level=debug_level,
+                        search_mode="ellipse",
+                        drag_and_drop=False,
+                        dlt_estimate=True,
+                        debug_level=2,  # debug_level,
                     )
+                    """
+                    # TEST ogni tot faccio una stima dlt
+                    #proj_offset = proj_results["proj_offset"]
+                    #source_offset = proj_results["source_offset"]
 
             # Update output results dictionary
             results = update_results(
@@ -333,11 +339,12 @@ def calibrate_projection(
     image_size=[768, 1024],
     pixel_spacing=[0.388, 0.388],
     search_area=7,
+    search_mode="circle",
     drag_and_drop=True,
     dlt_estimate=True,
-    angle_limit=0.01745,  # rad -> 1°
-    distance_limit=10,  # mm
-    offset_limit=10,  # mm
+    angle_tol=0.01745,  # rad -> 1°
+    distance_tol=10,  # mm
+    offset_tol=10,  # mm
     debug_level=0,
 ):
     """Calibration of a single projection.
@@ -398,7 +405,7 @@ def calibrate_projection(
         img = read_projection_hnc(projection_file, image_size)
 
     # Equalization
-    img = exposure.equalize_hist(img)
+    img = exposure.equalize_adapthist(img, clip_limit=0.05)
 
     # Project points starting from extrinsic and intrinsic parameters
     # generate proj_matrix (extrinsic and intrinsic parameters)
@@ -409,7 +416,7 @@ def calibrate_projection(
         pixel_spacing=pixel_spacing,
         isocenter=isocenter,
         proj_offset=proj_offset,  # [5, 10],  #
-        source_offset=source_offset,  # [30, 40],  #
+        source_offset=source_offset,  # [30, 10],  #
         image_size=image_size,
     )
 
@@ -427,23 +434,39 @@ def calibrate_projection(
         # them and identify the bbs as black pixels inside these areas (brandis
         # are used as probes)
 
-        # bbs_centroid, dlt_weights = search_bbs_centroids(
-        bbs_centroid = search_bbs_centroids(
-            img=img,
-            ref_2d=bbs_2d_corrected,
-            search_area=search_area,
-            image_size=image_size,
-            debug_level=debug_level,
-        )
+        if search_mode == "ellipse":
+            bbs_centroid = search_bbs_centroids_ellipse(
+                img=img,
+                ref_2d=bbs_2d_corrected,
+                search_area=search_area,
+                image_size=image_size,
+                debug_level=debug_level,
+            )
+        elif search_mode == "circle":
+            bbs_centroid = search_bbs_centroids_circles(
+                img=img,
+                ref_2d=bbs_2d_corrected,
+                search_area=search_area,
+                image_size=image_size,
+                debug_level=debug_level,
+            )
     else:
-        # bbs_centroid, dlt_weights = search_bbs_centroids(
-        bbs_centroid = search_bbs_centroids(
-            img=img,
-            ref_2d=bbs_2d,
-            search_area=search_area,
-            image_size=image_size,
-            debug_level=debug_level,
-        )
+        if search_mode == "ellipse":
+            bbs_centroid = search_bbs_centroids_ellipse(
+                img=img,
+                ref_2d=bbs_2d,
+                search_area=search_area,
+                image_size=image_size,
+                debug_level=debug_level,
+            )
+        elif search_mode == "circle":
+            bbs_centroid = search_bbs_centroids_circles(
+                img=img,
+                ref_2d=bbs_2d,
+                search_area=search_area,
+                image_size=image_size,
+                debug_level=debug_level,
+            )
 
     # Extract only reliable centroids
     good_bbs_index = np.where(~np.isnan(bbs_centroid[:, 0]))[0]
@@ -459,6 +482,10 @@ def calibrate_projection(
         dlt_camera_matrix, dlt_err = DLTcalib(
             nd=3, xyz=bbs_3d, uv=bbs_2d_init, weights=None, uv_ref=None
         )
+
+        ###dlt_camera_matrix, dlt_err = DLTcalib(
+        ###    nd=3, xyz=bbs_3d, uv=bbs_2d, weights=None, uv_ref=None
+        ###)
 
         dlt_parameters = decompose_camera_matrix(
             dlt_camera_matrix, image_size, pixel_spacing
@@ -488,19 +515,21 @@ def calibrate_projection(
         # Force sid, sdd and ga to have nominal value
         dlt_parameters["sid"] = sid
         dlt_parameters["sdd"] = sdd
+        dlt_parameters["idd"] = dlt_parameters["sdd"] - dlt_parameters["sid"]
         dlt_parameters["ga"] = detector_orientation[2]
 
         starting_guess = define_ls_parameters(
             dlt_parameters,
-            angle_limit=angle_limit,
-            offset_limit=offset_limit,
-            distance_limit=distance_limit,
+            angle_tol=angle_tol,
+            offset_tol=offset_tol,
+            distance_tol=distance_tol,
         )
     else:
         # No DLT, solve problem starting from input parameters
         parameters = {
             "sid": sid,
             "sdd": sdd,
+            "idd": sdd - sid,
             "ia": detector_orientation[0],
             "oa": detector_orientation[1],
             "ga": detector_orientation[2],
@@ -511,9 +540,9 @@ def calibrate_projection(
         }
         starting_guess = define_ls_parameters(
             parameters,
-            angle_limit=angle_limit,
-            offset_limit=offset_limit,
-            distance_limit=distance_limit,
+            angle_tol=angle_tol,
+            offset_tol=offset_tol,
+            distance_tol=distance_tol,
         )
 
     # Solve minimization problem
@@ -526,8 +555,8 @@ def calibrate_projection(
             # method="tnc",
             method="cobyla",  # seems to be faster than tnc
             args=(bbs_3d, bbs_2d_init, pixel_spacing, isocenter, image_size),
-            scale_covar=True,
-            calc_covar=True,
+            scale_covar=False,
+            calc_covar=False,
             # nan_policy="propagate"
             # max_nfev=10000,
         )
@@ -557,6 +586,7 @@ def calibrate_projection(
     # [sid, sdd, oa, ga, ia, px, py, sx, sy]
     sid_new = parameters["sid"]
     sdd_new = parameters["sdd"]
+    idd_new = parameters["idd"]
 
     # Remember: "ZXY" convention
     detector_orientation_new = np.array(
@@ -596,6 +626,7 @@ def calibrate_projection(
         print(f"Error: {ls_err}\n")
         print(f"sid:       {parameters['sid']:>15.3f}")
         print(f"sdd:       {parameters['sdd']:>15.3f}")
+        print(f"idd:       {parameters['idd']:>15.3f}")
         print(
             f"AngleX:    {parameters['oa']:>15.3f} rad -> {np.rad2deg(parameters['oa']):>8.3f} deg"
         )
@@ -611,7 +642,7 @@ def calibrate_projection(
         print(f"S offset Y:{parameters['sy']:>15.3f}")
         print(".......................")
 
-    if debug_level >= 1:
+    if (dlt_estimate is True) or (debug_level >= 1):
 
         def on_key_pressed(event):
             if event.key == "enter":
@@ -693,6 +724,7 @@ def calibrate_projection(
     results["detector_orientation"] = detector_orientation_new
     results["sdd"] = sdd_new
     results["sid"] = sid_new
+    results["idd"] = idd_new
     results["proj_offset"] = proj_offset_new
     results["source_offset"] = source_offset_new
     results["isocenter"] = isocenter_new
@@ -725,7 +757,7 @@ def compute_bbs_residuals(
     :rtype: float
     """
     # unknown
-    # parameters = [sid, sdd, oa, ga, ia, px, py, sx, sy]
+    # parameters = [sid, sdd, idd, oa, ga, ia, px, py, sx, sy]
     params = params.valuesdict()
     sid = np.array(params["sid"])
     sdd = np.array(params["sdd"])
@@ -752,64 +784,72 @@ def compute_bbs_residuals(
     return err
 
 
-def define_ls_parameters(parameters, angle_limit, offset_limit, distance_limit):
+def define_ls_parameters(parameters, angle_tol, offset_tol, distance_tol):
     ls_parameters = Parameters()
     ls_parameters.add(
         name="sid",
         value=parameters["sid"],
         vary=True,
-        min=parameters["sid"] - distance_limit,
-        max=parameters["sid"] + distance_limit,
+        min=parameters["sid"] - distance_tol,
+        max=parameters["sid"] + distance_tol,  # + distance_tol,
+    )
+    ls_parameters.add(
+        name="idd",
+        value=parameters["idd"],
+        vary=True,
+        min=parameters["idd"] - distance_tol,  # - distance_tol,
+        max=parameters["idd"] + distance_tol,
     )
     ls_parameters.add(
         name="sdd",
         value=parameters["sdd"],
         vary=True,
-        min=parameters["sdd"] - distance_limit,
-        max=parameters["sdd"] + distance_limit,
+        min=parameters["sdd"] - (2 * distance_tol),
+        max=parameters["sdd"] + (2 * distance_tol),
+        expr="sid + idd",
     )
     ls_parameters.add(
         name="oa",
         value=parameters["oa"],
         vary=True,
-        min=parameters["oa"] - angle_limit,
-        max=parameters["oa"] + angle_limit,
+        min=parameters["oa"] - angle_tol,
+        max=parameters["oa"] + angle_tol,
     )
     ls_parameters.add(name="ga", value=parameters["ga"], vary=False)
     ls_parameters.add(
         name="ia",
         value=parameters["ia"],
         vary=True,
-        min=parameters["ia"] - angle_limit,
-        max=parameters["ia"] + angle_limit,
+        min=parameters["ia"] - angle_tol,
+        max=parameters["ia"] + angle_tol,
     )
     ls_parameters.add(
         name="px",
         value=parameters["px"],
         vary=True,
-        min=parameters["px"] - offset_limit,
-        max=parameters["px"] + offset_limit,
+        min=parameters["px"] - offset_tol,
+        max=parameters["px"] + offset_tol,
     )
     ls_parameters.add(
         name="py",
         value=parameters["py"],
         vary=True,
-        min=parameters["py"] - offset_limit,
-        max=parameters["py"] + offset_limit,
+        min=parameters["py"] - offset_tol,
+        max=parameters["py"] + offset_tol,
     )
     ls_parameters.add(
         name="sx",
         value=parameters["sx"],
         vary=True,
-        min=parameters["sx"] - offset_limit,
-        max=parameters["sx"] + offset_limit,
+        min=parameters["sx"] - offset_tol,
+        max=parameters["sx"] + offset_tol,
     )
     ls_parameters.add(
         name="sy",
         value=parameters["sy"],
         vary=True,
-        min=parameters["sy"] - offset_limit,
-        max=parameters["sy"] + offset_limit,
+        min=parameters["sy"] - offset_tol,
+        max=parameters["sy"] + offset_tol,
     )
 
     return ls_parameters
@@ -822,6 +862,7 @@ def initialize_results():
         "detector_orientation": [],
         "sdd": [],
         "sid": [],
+        "idd": [],
         "proj_offset": [],
         "source_offset": [],
         "isocenter": [],
@@ -842,6 +883,7 @@ def update_results(global_res, proj_res, proj_path):
     global_res["detector_orientation"].append(proj_res["detector_orientation"])
     global_res["sdd"].append(proj_res["sdd"])
     global_res["sid"].append(proj_res["sid"])
+    global_res["idd"].append(proj_res["idd"])
     global_res["proj_offset"].append(proj_res["proj_offset"])
     global_res["source_offset"].append(proj_res["source_offset"])
     global_res["isocenter"].append(proj_res["isocenter"])
@@ -867,7 +909,7 @@ def plot_calibration_results(calib_results):
     panel_pos = np.array(calib_results["panel_3d"])
 
     print(f"Angle: {angles[0]}")
-    print(f"Rot matrix:")
+    print("Rot matrix:")
     print(rot[0])
     print(f"Source: {source_pos[0,:]}")
     print(f"Panel: {panel_pos[0,:]}")
@@ -978,11 +1020,6 @@ def plot_offset_variability(calib_results):
     p_off = np.array(calib_results["proj_offset"])
     s_off = np.array(calib_results["source_offset"])
 
-    px_smooth = savgol_filter(p_off[:, 0], 21, 3)
-    py_smooth = savgol_filter(p_off[:, 1], 21, 3)
-    sx_smooth = savgol_filter(s_off[:, 0], 21, 3)
-    sy_smooth = savgol_filter(s_off[:, 1], 21, 3)
-
     def on_key_pressed(event):
         if event.key == "enter":
             plt.close()
@@ -995,36 +1032,15 @@ def plot_offset_variability(calib_results):
     ax[1] = plt.subplot(1, 2, 2)
 
     ax[0].plot(p_off[:, 0], c="r", label="Proj Offset X")
-    ax[0].plot(px_smooth, c="r", label="Proj Offset X - smooth")
-
     ax[0].plot(p_off[:, 1], c="b", label="Proj Offset Y")
-    ax[0].plot(py_smooth, c="b", label="Proj Offset Y - smooth")
-
     ax[0].plot(s_off[:, 0], c="g", label="Source Offset X")
-    ax[0].plot(sx_smooth, c="g", label="Source Offset X - smooth")
-
     ax[0].plot(s_off[:, 1], c="m", label="Source Offset Y")
-    ax[0].plot(sy_smooth, c="m", label="Source Offset Y - smooth")
 
     ax[0].legend()
 
-    # ax[0].hlines(np.mean(p_off[:, 0]), xmin=0, xmax=p_off.shape[0], colors="r")
-    # ax[0].hlines(np.mean(p_off[:, 1]), xmin=0, xmax=p_off.shape[0], colors="b")
-    # ax[0].hlines(np.mean(s_off[:, 0]), xmin=0, xmax=p_off.shape[0], colors="g")
-    # ax[0].hlines(np.mean(s_off[:, 1]), xmin=0, xmax=p_off.shape[0], colors="m")
-
     ax[1].boxplot(
-        [
-            p_off[:, 0],
-            px_smooth,
-            p_off[:, 1],
-            py_smooth,
-            s_off[:, 0],
-            sx_smooth,
-            s_off[:, 1],
-            sy_smooth,
-        ],
-        labels=["pX", "pXs", "pY", "pYs", "sX", "sXs", "sY", "sYs"],
+        [p_off[:, 0], p_off[:, 1], s_off[:, 0], s_off[:, 1]],
+        labels=["pX", "pY", "sX", "sY"],
     )
 
     plt.show()

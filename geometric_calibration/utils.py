@@ -13,8 +13,8 @@ from skimage import exposure
 from skimage.feature import canny
 from skimage import color
 from skimage.util import img_as_ubyte
-from skimage.transform import hough_circle, hough_circle_peaks
-from skimage.draw import circle_perimeter
+from skimage.transform import hough_circle, hough_circle_peaks, hough_ellipse
+from skimage.draw import circle_perimeter, ellipse_perimeter
 import cv2
 
 from scipy.spatial.transform import Rotation as R
@@ -213,7 +213,9 @@ def drag_and_drop_bbs(projection, bbs_projected):
     return r2d_corrected.final_coord
 
 
-def search_bbs_centroids(img, ref_2d, search_area, image_size, debug_level=0):
+def search_bbs_centroids_ellipse(
+    img, ref_2d, search_area, image_size, debug_level=0
+):
     """Search bbs based on projection.
 
     Starting from the updated coordinates, define a search area around them
@@ -271,28 +273,223 @@ def search_bbs_centroids(img, ref_2d, search_area, image_size, debug_level=0):
         max_row = int(min([ind_row + search_area, image_size[1]]))
 
         # define a mask on the original image to underline field of research
-        # sub_img_org = img[min_row:max_row, min_col:max_col]
         sub_img = img[min_row:max_row, min_col:max_col]
 
         # Contrast stretching
         # TODO Valutare se rimuovere, in alcuni casi da problemi
-        # p1, p2 = np.percentile(sub_img_org, (1, 60))
-        # sub_img = exposure.rescale_intensity(sub_img_org, in_range=(p1, p2))
+        # p1, p2 = np.percentile(sub_img, (1, 60))
+        # sub_img = exposure.rescale_intensity(sub_img, in_range=(p1, p2))
+
+        edges = canny(sub_img, sigma=1.5)
+
+        # Perform a Hough Transform to find ellipses in image.
+        # The accuracy corresponds to the bin size of a major axis.
+        # The value is chosen in order to get a single high accumulator.
+        # The threshold eliminates low accumulators
+
+        # Working version
+        # result = hough_ellipse(image=edges,threshold=4, accuracy=0.1, min_size=1, max_size=10)
+
+        result = hough_ellipse(
+            image=edges,
+            threshold=4,
+            accuracy=0.1,
+            min_size=1,
+            max_size=5,  # aiuta ad evitare che due bbs molto vicine vengano scambiate per un ellisse enorme
+        )
+
+        if result.shape[0] != 0:
+            result.sort(order="accumulator")
+
+            # Estimated parameters for the ellipse
+            best = list(result[-1])
+            accums, cy, cx, a, b, orientation = [x for x in best]
+
+            if a > b:
+                eccentricity = np.sqrt(1 - (b / a) ** 2)
+            else:
+                # When orientation is not in [-pi:pi] the function
+                # hough_ellipse returns a and b swapped.
+                eccentricity = np.sqrt(1 - (a / b) ** 2)
+
+            if debug_level >= 2:
+                print("---------")
+                print(f"Accum: {accums}")
+                print(f"Cx: {cx}, Cy: {cy}")
+                print(f"a: {a}, b: {b}")
+                print(f"Orientation: {orientation}")
+                print(f"Eccentricity: {eccentricity}")
+                print("---------")
+        else:
+            if debug_level >= 1:
+                print("BB discarded: no ellipse found")
+            cx = 0
+            cy = 0
+            a = 0
+            b = 0
+            orientation = 0
+            eccentricity = -1
+            bbs_centroid.append([np.nan, np.nan])
+
+        if eccentricity != -1:
+            if eccentricity > 0.5:
+                if debug_level >= 1:
+                    print("BB discarded: eccentricity is too high")
+                cx = 0
+                cy = 0
+                a = 0
+                b = 0
+                orientation = 0
+                bbs_centroid.append([np.nan, np.nan])
+            else:
+                bbs_centroid.append([min_col + cx, min_row + cy])
+
+        edges = color.gray2rgb(img_as_ubyte(edges))
+
+        sub_img_cont = np.ones(sub_img.shape)
+        sub_img_cont = color.gray2rgb(sub_img_cont)
+
+        # Draw the ellipse on the original image
+        ellipse_y, ellipse_x = ellipse_perimeter(
+            int(round(cy)),
+            int(round(cx)),
+            int(round(a)),
+            int(round(b)),
+            orientation,
+        )
+        # Remove countour pixel outside of the image
+        # ellipse_y = ellipse_y.reshape((len(ellipse_y, 1)))
+        # ellipse_x = ellipse_x.reshape((len(ellipse_x, 1)))
+        # ellipse_contours = np.concatenate(ellipse_y, ellipse_x, axis=1)
+
+        ###sub_img_cont[ellipse_y, ellipse_x] = (1, 0, 0)
+        # sub_img_cont[int(round(cy)), int(round(cx))] = (1, 0, 0)
+        # edges[int(round(cy)), int(round(cx))] = (250, 0, 0)
+        ###edges[ellipse_y, ellipse_x] = (250, 0, 0)
+
+        if debug_level == 2:
+            fig, axes = plt.subplots(ncols=3, figsize=(8, 2.5))
+            fig.canvas.mpl_connect("key_press_event", on_key_pressed)
+
+            ax = axes.ravel()
+            ax[0] = plt.subplot(1, 3, 1)
+            ax[1] = plt.subplot(1, 3, 2)
+            ax[2] = plt.subplot(1, 3, 3)
+
+            ax[0].imshow(sub_img, cmap="gray")
+            ax[0].set_title("Original")
+
+            ax[1].set_title("Edges")
+            ax[1].imshow(edges)
+            ax[1].scatter(cx, cy, c="r")
+
+            ax[2].set_title("Centroid Found")
+            ax[2].imshow(sub_img, cmap="gray")
+            # ax[2].imshow(sub_img_cont, alpha=0.5)
+            ax[2].scatter(cx, cy, c="r", s=2)
+
+            plt.show()
+
+    bbs_centroid = np.array(bbs_centroid)
+
+    if debug_level >= 1:
+        # Show final position for found cetroids
+        bbs_dbg = bbs_centroid[~np.isnan(bbs_centroid).any(axis=1)]
+        if debug_level >= 2:
+            print(f"Centroid found: {bbs_dbg.shape[0]}")
+            print("Centroid positions:")
+            print(bbs_dbg)
+
+        fig, ax = plt.subplots()
+        fig.canvas.mpl_connect("key_press_event", on_key_pressed)
+
+        ax.imshow(img, cmap="gray")
+        ax.scatter(
+            bbs_dbg[:, 0], bbs_dbg[:, 1], marker="x", c="g"
+        )  # , alpha=0.5)
+        ax.scatter(ref_2d[:, 0], ref_2d[:, 1], marker="x", c="r", alpha=0.5)
+        # plt.grid(True, color="r")
+        plt.show()
+
+    return bbs_centroid
+
+
+def search_bbs_centroids_circles(
+    img, ref_2d, search_area, image_size, debug_level=0
+):
+    """Search bbs based on projection.
+
+    Starting from the updated coordinates, define a search area around them
+    and identify the bbs as black pixels inside these areas (brandis are used
+    as probes). Search for the bbs in the image (basically very low intensity
+    surrounding by higher intensity pixel. Centroids coordinates are the mean
+    pixels that have an intensity that is lower than the lowest nominal
+    intensity plus a tollerance.
+
+    :param img: Array containing the loaded .raw file
+    :type img: numpy.array
+    :param ref_2d: Array nx2 containing the coordinates for bbs projected on
+     img
+    :type ref_2d: numpy.array
+    :param search_area: Size of the region in which to search for centroids.
+     Actual dimension of the area is a square with dimension (2*search_area,
+     2*search_area)
+    :type search_area: int
+    :param dim_img: Dimension of img
+    :type dim_img: list
+    :param grayscale_range: Grayscale range for current projection
+    :type grayscale_range: list
+    :raises Exception: if the function does not find any centroid, an
+     exception is thrown
+    :return: Array nx2 containing coordinates for every centroids found [x,y]
+    :rtype: numpy.array
+    """
+
+    def on_key_pressed(event):
+        if event.key == "enter":
+            plt.close()
+
+    bbs_centroid = []
+    for curr_point in ref_2d:  # for each bbs
+        ind_col = round(curr_point[0])
+        ind_row = round(curr_point[1])
+
+        # if bbs is not even inside the image, skip it
+        if (
+            (ind_row < 0)
+            or (ind_col < 0)
+            or (ind_row > image_size[1])
+            or (ind_col > image_size[0])
+        ):
+            bbs_centroid.append([np.nan, np.nan])
+            if debug_level >= 1:
+                print("Out of image")
+            continue
+
+        # define the field of research
+        min_col = int(max([0, ind_col - search_area]))
+        min_row = int(max([0, ind_row - search_area]))
+
+        max_col = int(min([ind_col + search_area, image_size[0]]))
+        max_row = int(min([ind_row + search_area, image_size[1]]))
+
+        # define a mask on the original image to underline field of research
+        sub_img = img[min_row:max_row, min_col:max_col]
+
+        # Contrast stretching
+        # TODO Valutare se rimuovere, in alcuni casi da problemi
+        # p1, p2 = np.percentile(sub_img, (1, 60))
+        # sub_img = exposure.rescale_intensity(sub_img, in_range=(p1, p2))
 
         edges = canny(sub_img, sigma=2)
 
         # Radii to be detected
-        # hough_radii = np.arange(3, 10)
         hough_radii = range(2, 10)
-        # hough_res = hough_circle(edges, hough_radii, normalize=True)
         hough_res = hough_circle(
             edges, hough_radii, normalize=True, full_output=False
         )
 
         # Select the most prominent circle
-        # accums, cx, cy, radii = hough_circle_peaks(
-        #    hough_res, hough_radii, total_num_peaks=1, normalize=True
-        # )
         accums, cx, cy, radii = hough_circle_peaks(
             hough_res,
             hough_radii,
@@ -315,7 +512,7 @@ def search_bbs_centroids(img, ref_2d, search_area, image_size, debug_level=0):
             cy = np.array([0])
             radii = np.array([0])
             bbs_centroid.append([np.nan, np.nan])
-        elif accums[0] < 0.50:
+        elif accums[0] < 0.30:
             if debug_level >= 1:
                 print("BB discarded: image is not sufficiently clear")
             cx[0] = 0
