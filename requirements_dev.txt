@@ -9,7 +9,7 @@ Sphinx==3.1.2
 twine==3.2.0
 Click==7.1.2
 click-config-file==0.6.0
-pytest==5.4.3
+pytest==6.2.2
 pytest-runner==5.2
 black==19.10b0
 scipy==1.5.1
