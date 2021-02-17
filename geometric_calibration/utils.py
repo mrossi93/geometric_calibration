@@ -1,15 +1,12 @@
-"""Utilities module."""
+"""
+    This module contains some utility function for image manipulation.
+"""
 import numpy as np
 
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-from skimage.exposure import histogram
-from skimage.filters import threshold_otsu
-from skimage.measure import regionprops
-
-from skimage import exposure
 from skimage.feature import canny
 from skimage import color
 from skimage.util import img_as_ubyte
@@ -21,40 +18,25 @@ from scipy.spatial.transform import Rotation as R
 # matplotlib.rcParams["toolbar"] = "None"
 
 
-def plot_img_and_hist(image, axes, bins=256):
-    """Plot an image along with its histogram and cumulative histogram.
-
-    """
-    ax_img, ax_hist = axes
-    ax_cdf = ax_hist.twinx()
-
-    # Display image
-    ax_img.imshow(image, cmap=plt.cm.gray)
-    ax_img.set_axis_off()
-
-    # Display histogram
-    ax_hist.hist(image.ravel(), bins=bins, histtype="step", color="black")
-    ax_hist.ticklabel_format(axis="y", style="scientific", scilimits=(0, 0))
-    ax_hist.set_xlabel("Pixel intensity")
-    ax_hist.set_xlim(0, 1)
-    ax_hist.set_yticks([])
-
-    # Display cumulative distribution
-    img_cdf, bins = exposure.cumulative_distribution(image, bins)
-    ax_cdf.plot(bins, img_cdf, "r")
-    ax_cdf.set_yticks([])
-
-    return ax_img, ax_hist, ax_cdf
-
-
 class DraggablePoints:
-    """Draggable points on matplotlibe figure.
+    """
+    Draggable points on a matplotlib figure.
 
     Returns:
-        DraggablePoints -- DraggablePoints object
+        DraggablePoints: DraggablePoints object
     """
 
     def __init__(self, artists, tolerance=15):
+        """
+        Initialize an instance of DraggablePoints object and superimpose it on
+        the current matplotlib Figure.
+
+        Args:
+            artists (list): list of matplotlib Circles with coordinates (x,y)
+                in pixel coordinates.
+            tolerance (int, optional): Tolerance for mouse selection when
+                dragging on screen. Defaults to 15.
+        """
         for artist in artists:
             artist.set_picker(tolerance)
 
@@ -86,10 +68,11 @@ class DraggablePoints:
         plt.show()
 
     def on_press(self, event):
-        """Event Handler for mouse button pression.
+        """
+        Event Handler for mouse button pression.
 
-        Arguments:
-            event -- Event that triggers the method
+        Args:
+            event (event): Event that triggers the method.
         """
         # is the press over some artist
         isonartist = False
@@ -120,21 +103,22 @@ class DraggablePoints:
             self.offset = artist_center - event_center
 
     def on_release(self, event):
-        """Event Handler for mouse button release.
+        """
+        Event Handler for mouse button release.
 
-        Arguments:
-            event -- Event that triggers the method
+        Args:
+            event (event): Event that triggers the method
         """
         if self.currently_dragging:
             self.currently_dragging = False
 
     def on_motion(self, event):
-        """Event Handler for mouse movement during dragging of points.
-
-        Arguments:
-            event -- Event that triggers the method
         """
+        Event Handler for mouse movement during dragging of points.
 
+        Args:
+            event (event): Event that triggers the method
+        """
         if self.currently_dragging and not self.fine_mode:
             # Update the entire group
             try:
@@ -151,10 +135,11 @@ class DraggablePoints:
             self.fig.canvas.draw_idle()
 
     def on_key_pressed(self, event):
-        """Event Handler for "enter" key pression.
+        """
+        Event Handler for "Enter" key pression.
 
-        Arguments:
-            event -- Event that triggers the method
+        Args:
+            event (event): Event that triggers the method
         """
         if not self.currently_dragging and event.key == "enter":
             plt.close()
@@ -162,37 +147,45 @@ class DraggablePoints:
             self.fine_mode = True
 
     def on_key_released(self, event):
+        """
+        Event Handler for any key released.
+
+        Args:
+            event (event): Event that triggers the method
+        """
         if self.fine_mode:
             self.fine_mode = False
 
     def on_close(self, event):
-        """Event Handler for closure of figure.
+        """
+        Event Handler for closure of figure.
 
-        Arguments:
-            event -- Event that triggers the method
+        Args:
+            event (event): Event that triggers the method
         """
         self.final_coord = self.get_coord()
 
     def get_coord(self):
-        """Obtain current coordinates of points.
+        """
+        Obtain current coordinates (x,y) of points.
 
-        :return: An array nx2 containing coordinates for every point [x,y]
-        :rtype: numpy.array
+        Returns:
+            numpy.array: An array Nx2 containing coordinates for N point (x,y).
         """
         return np.array([a.center for a in self.artists])
 
 
 def drag_and_drop_bbs(projection, bbs_projected):
-    """Drag&Drop Routines for bbs position's correction.
+    """
+    Drag&Drop Routines for bbs position's correction.
 
-    :param projection_path: Path to the projection .raw file
-    :type projection_path: str
-    :param bbs_projected: Array nx2 with bbs yet projected
-    :type bbs_projected: numpy.array
-    :param grayscale_range: Grayscale range for current projection
-    :type grayscale_range: list
-    :return: Array nx2 containing the updated coordinates for bbs
-    :rtype: numpy.array
+    Args:
+        projection (str): Path to the projection (.raw of .hnc) file
+        bbs_projected (numpy.array): Array Nx2 with N BBs yet projected on
+            image plane
+
+    Returns:
+        numpy.array: Array Nx2 containing the updated coordinates for N BBs
     """
     # Overlay reference bbs with projection
     fig = plt.figure(num="Drag&Drop")
@@ -217,32 +210,31 @@ def drag_and_drop_bbs(projection, bbs_projected):
 def search_bbs_centroids(
     img, ref_2d, search_area, image_size, mode, debug_level=0
 ):
-    """Search bbs based on projection.
+    """
+    Search bbs based on projection.
 
     Starting from the updated coordinates, define a search area around them
-    and identify the bbs as black pixels inside these areas (brandis are used
-    as probes). Search for the bbs in the image (basically very low intensity
-    surrounding by higher intensity pixel. Centroids coordinates are the mean
-    pixels that have an intensity that is lower than the lowest nominal
-    intensity plus a tollerance.
+    and identify the BBs centroid as the center of a circle or an ellipse
+    (based on mode argument). This function automatically set as (np.nan,
+    np.nan) the coordinates of BBs outside image space, too dark or too close
+    to another BBs.
 
-    :param img: Array containing the loaded .raw file
-    :type img: numpy.array
-    :param ref_2d: Array nx2 containing the coordinates for bbs projected on
-     img
-    :type ref_2d: numpy.array
-    :param search_area: Size of the region in which to search for centroids.
-     Actual dimension of the area is a square with dimension (2*search_area,
-     2*search_area)
-    :type search_area: int
-    :param dim_img: Dimension of img
-    :type dim_img: list
-    :param grayscale_range: Grayscale range for current projection
-    :type grayscale_range: list
-    :raises Exception: if the function does not find any centroid, an
-     exception is thrown
-    :return: Array nx2 containing coordinates for every centroids found [x,y]
-    :rtype: numpy.array
+    Args:
+        img (numpy.array): Array containing the loaded .raw or .hnc file
+        ref_2d (numpy.array): Nx2 array containing the coordinates for BBs
+            projected on img
+        search_area (int): Size of the region in which to search for centroids.
+            Actual dimension of the area is a square with dimension (2*
+            search_area,2*search_area)
+        image_size (list): Dimension of img
+        mode (str): Centroid search modality. It can be "circle" or "ellipse".
+            Ellipse is slower but provide better results in general.
+        debug_level (int, optional): Level for debug messages, 0 means no
+            debug messages, 1 light debug and 2 hard debug. Defaults to 0.
+
+    Returns:
+        numpy.array: Nx2 array containing coordinates for every centroids found
+        (x,y)
     """
 
     def on_key_pressed(event):
@@ -285,7 +277,7 @@ def search_bbs_centroids(
         edges = canny(sub_img, sigma=1.5)  # per ellisse
         # edges = canny(sub_img, sigma=2) # per cerchio
 
-        if mode is "ellipse":
+        if mode == "ellipse":
             # Perform a Hough Transform to find ellipses in image.
             # The accuracy corresponds to the bin size of a major axis.
             # The value is chosen in order to get a single high accumulator.
@@ -370,7 +362,7 @@ def search_bbs_centroids(
             # sub_img_cont[int(round(cy)), int(round(cx))] = (1, 0, 0)
             # edges[int(round(cy)), int(round(cx))] = (250, 0, 0)
             ###edges[ellipse_y, ellipse_x] = (250, 0, 0)
-        elif mode is "circle":
+        elif mode == "circle":
             # Radii to be detected
             hough_radii = range(2, 10)
             hough_res = hough_circle(
@@ -490,66 +482,22 @@ def search_bbs_centroids(
     return bbs_centroid
 
 
-def angle2rotm(rot_x, rot_y, rot_z):
-    """Generate a rototranslator (only rotation) starting from Euler angles
-
-    NB: Convention is 'XYZ'
-
-    :param rot_x: Rotation along x
-    :type rot_x: int or float
-    :param rot_y: Rotation along y
-    :type rot_y: int or float
-    :param rot_z: Rotation along z
-    :type rot_z: int or float
-    :return: 4x4 Rototranslation matrix in homogeneous form
-    :rtype: numpy.array
-    """
-    Rx = np.array(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, np.cos(rot_x).item(), -np.sin(rot_x).item()],
-            [0.0, np.sin(rot_x).item(), np.cos(rot_x).item()],
-        ]
-    )
-
-    Ry = np.array(
-        [
-            [np.cos(rot_y).item(), 0.0, np.sin(rot_y).item()],
-            [0.0, 1.0, 0.0],
-            [-np.sin(rot_y).item(), 0.0, np.cos(rot_y).item()],
-        ]
-    )
-
-    Rz = np.array(
-        [
-            [np.cos(rot_z).item(), -np.sin(rot_z).item(), 0.0],
-            [np.sin(rot_z).item(), np.cos(rot_z).item(), 0.0],
-            [0.0, 0.0, 1.0],
-        ]
-    )
-
-    rot = np.matmul(Rz, np.matmul(Ry, Rx))
-    trans = rot
-    trans = np.append(trans, np.zeros((3, 1)), axis=1)
-    trans = np.append(trans, np.zeros((1, 4)), axis=0)
-    trans[3, 3] = 1.0
-    return trans
-
-
 def project_camera_matrix(coord_3d, camera_matrix, image_size):
-    """Project 3D data starting from camera matrix based on intrinsic and
-    extrinsic parameters
+    """
+    Project 3D data (x,y,z) in world coordinate system to 2D (u,v) coordinate
+    system using camera matrix computed with
+    :py:meth:`geometric_calibration.utils.create_camera_matrix` function.
 
-    :param r3d: Array nx3 containing 3d coordinates of points [x,y,z]
-    :type r3d: numpy.array
-    :param image_center: Center of the image in pixels
-    :type image_center: list
-    :param camera_matrix: Projection matrix obtained combining extrinsic
-     and intrinsic parameters
-    :type camera_matrix: numpy.array
-    :return: Array nx2 containing 2D coordinates of points projected on
-     image plane [x,y]
-    :rtype: numpy.array
+    Args:
+        coord_3d (numpy.array): Nx3 array containing 3D coordinates of points
+            (x,y,z) in world coordinate system.
+        camera_matrix (numpy.array): 3x4 projection matrix obtained combining
+            both extrinsic and intrinsic parameters.
+        image_size (list): Dimension of the image
+
+    Returns:
+        numpy.array: Nx2 array containing 2D coordinates of points (u,v)
+        projected on image plane (u,v)
     """
     # Apply proj_matrix and project
     coord_2d = np.dot(
@@ -574,25 +522,24 @@ def create_camera_matrix(
     source_offset,
     image_size,
 ):
-    """Generate projection matrix starting from extrinsic and intrinsic
-    parameters (according to the rules of creation of a projection matrix)
-    MODIFIED BY GABRIELE BELOTTI
-
-    :param panel_orientation: Array nx3 containing rotations of the image's
-     plane [rot_x, rot_y, rot_z]
-    :type panel_orientation: numpy.array
-    :param sdd: SDD distance
-    :type sdd: float
-    :param sid: SID distance
-    :type sid: float
-    :param pixel_size: Pixel Dimensions in mm
-    :type pixel_size: list
-    :param isocenter: Coordinates of isocenter
-    :type isocenter: numpy.array
-    :return: 3x4 Camera Matrix
-    :rtype: numpy.array
     """
+    Generate projection matrix starting from extrinsic and intrinsic
+    parameters (according to the rules of creation of a projection matrix).
 
+    Args:
+        detector_orientation (numpy.array): Nx3 array containing rotations of
+            the image's plane [rot_x, rot_y, rot_z]
+        sdd (float): Source to Detector distance
+        sid (float): Source to Isocenter distance
+        pixel_spacing (list): Pixel dimension in mm
+        isocenter (numpy.array): Coordinates of isocenter
+        proj_offset (list): Detector offset, expressed as [offset_x, offset_y]
+        source_offset (list): Source offset, expressed as [offset_x, offset_y]
+        image_size (list): Dimension of image
+
+    Returns:
+        numpy.array: 3x4 camera matrix
+    """
     # extrinsic parameters (in homogeneous form)
     extrinsic = np.identity(4)
     extrinsic[:3, :3] = R.from_euler("zxy", detector_orientation).as_matrix().T
@@ -621,53 +568,19 @@ def create_camera_matrix(
 
 
 def get_grayscale_range(img):
-    """New grayscale range for .raw images, since original values are too
+    """
+    New grayscale range for .raw or .hnc images, since original values are too
     bright. New range is computed between min of image and one order of
     magnitude less than original image. Worst case scenario [0, 6553.5]
-    (since im is loaded as uint16)
+    (since image is loaded as uint16).
 
-    :param img: Array containing the loaded .raw image
-    :type img: numpy.array
-    :return: Grayscale range for current projection
-    :rtype: list
+    Args:
+        img (numpy.array): Array containing the loaded .raw or .hnc image
+
+    Returns:
+        list: Grayscale range for current projection
     """
     # image range - lowest and highest gray-level intensity for projection
     # grayscale_range = [np.amin(img), np.amax(img) / 8]
     grayscale_range = [0, 10000]
     return grayscale_range
-
-
-def adjust_image(img, new_grayscale_range):
-    """Translate image data to the appropriate lower bound of the default data
-    range. This translation is needed to show properly .raw images.
-
-    :param img: Array containing the loaded .raw image
-    :type img: numpy.array
-    :param new_grayscale_range: Grayscale range to apply to image
-    :type new_grayscale_range: list
-    :return: Image corrected with new grayscale range
-    :rtype: numpy.array
-    """
-    # get current image range
-    curr_range = [np.amin(img), np.amax(img)]
-
-    if curr_range[0] == curr_range[1]:
-        return img
-
-    # translate to "zero out" the data
-    new_img = img - curr_range[0]
-
-    # apply a linear stretch of the data such that the selected data range
-    # spans the entire default data range
-    scale_factor = (new_grayscale_range[1] - new_grayscale_range[0]) / (
-        curr_range[1] - curr_range[0]
-    )
-    new_img = new_img * scale_factor
-
-    new_img = new_img + new_grayscale_range[0]
-
-    # clip all data that falls outside the default range
-    new_img[new_img < new_grayscale_range[0]] = new_grayscale_range[0]
-    new_img[new_img > new_grayscale_range[1]] = new_grayscale_range[1]
-
-    return new_img

@@ -33,10 +33,26 @@ geometric\_calibration.reader module
    :undoc-members:
    :show-inheritance:
 
+geometric\_calibration.dlt module
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. automodule:: geometric_calibration.dlt
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 geometric\_calibration.utils module
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 .. automodule:: geometric_calibration.utils
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+geometric\_calibration.slideshow module
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. automodule:: geometric_calibration.slideshow
    :members:
    :undoc-members:
    :show-inheritance:
