@@ -16,6 +16,7 @@ requirements = [
     "numpy",
     "scipy==1.4.1",
     "scikit-image==0.15.0",
+    "Pillow>=6.2.0",
 ]
 
 setup_requirements = [
