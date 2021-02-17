@@ -1,3 +1,6 @@
+"""
+Modules for slideshow utility of CLI.
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 from geometric_calibration.reader import (
@@ -12,7 +15,24 @@ from geometric_calibration.geometric_calibration import (
 
 
 class IndexTracker(object):
+    """
+    Main handler for slideshow
+    """
+
     def __init__(self, ax, X, angles, bbs_2d, grayscale_range):
+        """
+        Initialize an instance of IndexTracker class.
+
+        Args:
+            ax (matplotlib Figure): Figure object in which slideshow is
+                presented
+            X (list): list of images. Each image is a numpy array
+            angles (list): List of gantry angles for each projection
+            bbs_2d (list): List of 2D coordinates of BBs for each projection
+            grayscale_range (list): Grayscale value found with
+                :py:meth:`geometric_calibration.utils.get_grayscale_range`
+                function
+        """
         self.ax = ax
         self.ax.set_title(
             "Use mouse scroll wheel to navigate between projections.\nPress Enter to close"
@@ -41,6 +61,13 @@ class IndexTracker(object):
         self.update()
 
     def onscroll(self, event):
+        """
+        Event Handler for mouse scroll.
+
+        Args:
+            event (event): Event that triggers the method.
+        """
+
         if event.button == "up":
             self.ind = (self.ind + 1) % self.slices
         else:
@@ -48,6 +75,9 @@ class IndexTracker(object):
         self.update()
 
     def update(self):
+        """
+        Update visualized image on screen.
+        """
         self.im.set_data(self.X[self.ind, :, :])
         self.im_ref.remove()
         self.im_ref = self.ax.scatter(
@@ -65,6 +95,16 @@ class IndexTracker(object):
 
 
 def slideshow(calibration_results, bbs_3d, mode):
+    """
+    Create a slideshow of some projections with found BBs superimposed on each
+    image as red circles.
+
+    Args:
+        calibration_results (dict): Dictionary containing the results of a
+            complete calibration.
+        bbs_3d (numpy.array): Array with BBs coodinates in world coordinate system
+        mode (str): Calibration modality, it can be "cbct or "2d"
+    """
     if mode == "cbct":
         img_dim = [768, 1024]
         pixel_size = [0.388, 0.388]
