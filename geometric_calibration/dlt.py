@@ -34,7 +34,7 @@ def Normalization(nd, x):
     return Tr, x
 
 
-def DLTcalib(nd, xyz, uv, weights=None, uv_ref=None):
+def DLTcalib(nd, xyz, uv, uv_ref=None):
     """
     Camera calibration by DLT using known object points and their
     corresponding image points.
@@ -95,21 +95,8 @@ def DLTcalib(nd, xyz, uv, weights=None, uv_ref=None):
         x, y, z = xyzn[i, 0], xyzn[i, 1], xyzn[i, 2]
         u, v = uvn[i, 0], uvn[i, 1]
 
-        if weights is not None:
-            current_A = np.dot(
-                weights[i],
-                np.array(
-                    [
-                        [x, y, z, 1, 0, 0, 0, 0, -u * x, -u * y, -u * z, -u],
-                        [0, 0, 0, 0, x, y, z, 1, -v * x, -v * y, -v * z, -v],
-                    ]
-                ),
-            ).tolist()
-            A.append(current_A[0])
-            A.append(current_A[1])
-        else:
-            A.append([x, y, z, 1, 0, 0, 0, 0, -u * x, -u * y, -u * z, -u])
-            A.append([0, 0, 0, 0, x, y, z, 1, -v * x, -v * y, -v * z, -v])
+        A.append([x, y, z, 1, 0, 0, 0, 0, -u * x, -u * y, -u * z, -u])
+        A.append([0, 0, 0, 0, x, y, z, 1, -v * x, -v * y, -v * z, -v])
 
     # Convert A to array
     A = np.asarray(A)
@@ -119,23 +106,20 @@ def DLTcalib(nd, xyz, uv, weights=None, uv_ref=None):
 
     # The parameters are in the last line of Vh and normalize them
     L = V[-1, :] / V[-1, -1]
-    # print(L)
+
     # Camera projection matrix
     H = L.reshape(3, nd + 1)
-    # print(H)
 
     # Denormalization
     # pinv: Moore-Penrose pseudo-inverse of a matrix, generalized inverse of a matrix using its SVD
     H = np.dot(np.dot(np.linalg.pinv(Tuv), H), Txyz)
-    # print(H)
     H = H / H[-1, -1]
-    # print(H)
     L = H.flatten()
-    # print(L)
 
     # Mean error of the DLT (mean residual of the DLT transformation in units of camera coordinates):
     uv2 = np.dot(H, np.concatenate((xyz.T, np.ones((1, xyz.shape[0])))))
     uv2 = uv2 / uv2[2, :]
+
     # Mean distance:
     err = np.sqrt(np.mean(np.sum((uv2[0:2, :].T - uv) ** 2, 1)))
     if uv_ref is not None:
@@ -157,7 +141,6 @@ def decompose_camera_matrix(L, image_size, pixel_spacing):
     PosY = np.array([[-L[3]], [-L[7]], [-1.0]])
 
     # Source in fixed frame
-    # X0 = np.matmul(np.linalg.inv(PosMat), PosY)
     X0 = np.dot(np.linalg.inv(PosMat), PosY)
 
     LL = np.sqrt(PosMat[2, 0] ** 2 + PosMat[2, 1] ** 2 + PosMat[2, 2] ** 2)

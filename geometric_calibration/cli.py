@@ -45,10 +45,8 @@ def save_cli(path, results, mode):
         click.echo("\nFound existing LUT for this phantom:")
         for file in old_files:
             click.echo("{}".format(file))
-        # !!! NB: per il momento le vecchie lut vengono sempre cancellate di default
-        # Ricordarsi di impostare default=False in production
         if click.confirm(
-            "Do you want to delete it?", default=True, show_default=True
+            "Do you want to delete it?", default=False, show_default=True
         ):
             for file in old_files:
                 os.remove(os.path.join(path, file))
@@ -141,12 +139,19 @@ def main(mode, input_path, sid, sdd, drag_every, debug_level, ref):
 
     Author: Matteo Rossi"""
 
+    # Create folder for output files if it does not exit already
+    results_dir = os.path.join(input_path, "calibration")
+    try:
+        os.makedirs(results_dir)
+    except BaseException:
+        pass
+
     # set up logging to file
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)-8s] %(message)s",
         datefmt="%d-%m-%y %H:%M:%S",
-        filename=os.path.join(input_path, "calibration_log.txt"),
+        filename=os.path.join(results_dir, "calibration_log.txt"),
         # filemode="a",
     )
     # define a Handler which writes INFO messages or higher to the sys.stderr
@@ -227,7 +232,7 @@ def main(mode, input_path, sid, sdd, drag_every, debug_level, ref):
             type=str,
         )
         if user_choice == "s":
-            save_cli(input_path, calibration_results, mode)
+            save_cli(results_dir, calibration_results, mode)
             save_flag = True
         elif user_choice == "p":
             plot_calibration_results(calibration_results)
@@ -238,15 +243,13 @@ def main(mode, input_path, sid, sdd, drag_every, debug_level, ref):
         elif user_choice == "v":
             plot_offset_variability(calibration_results)
         elif user_choice == "c":
-            """
             if save_flag is False:
                 if click.confirm(
                     "New LUT not saved. Do you want to save it?",
                     default=True,
                     show_default=True,
                 ):
-                    save_cli(input_path, calibration_results, mode)
-            """
+                    save_cli(results_dir, calibration_results, mode)
             break
         else:
             click.echo("Command '{}' not recognized.".format(user_choice))

@@ -14,7 +14,6 @@ from lmfit import Parameters, minimize, fit_report
 from scipy.spatial.transform import Rotation as R
 from scipy.signal import savgol_filter
 from skimage import exposure
-import skimage  # Solo per esperimenti, poi da mettere solo gli import precisi
 import matplotlib.pyplot as plt
 
 from geometric_calibration.reader import (
@@ -27,8 +26,7 @@ from geometric_calibration.utils import (
     create_camera_matrix,
     project_camera_matrix,
     drag_and_drop_bbs,
-    search_bbs_centroids_circles,
-    search_bbs_centroids_ellipse,
+    search_bbs_centroids,
 )
 
 from geometric_calibration.dlt import DLTcalib, decompose_camera_matrix
@@ -61,7 +59,7 @@ def calibrate_cbct(
     """
     # RCS: room coordinate system
     # A: isocenter
-    gantry_offset = 90  # 90 for room Sim, 0 for room 2
+    gantry_offset = 0  # 90 for room Sim, 0 for room 2
 
     # Read image labels
     logging.info("Reading imgLabels file...")
@@ -130,6 +128,10 @@ def calibrate_cbct(
     distance_tol = 15  # mm
     offset_tol = 40  # mm
 
+    # Allocate array for error memory
+    memory_dim = 10
+    error_memory = np.full(memory_dim, np.inf)
+
     # Calibrate views
     with click.progressbar(
         iterable=range(len(gantry_angles)), fill_char="=", empty_char=" ",
@@ -149,8 +151,8 @@ def calibrate_cbct(
                     sdd=sdd,
                     gantry_angle=gantry_angles[k],
                     gantry_angle_offset=gantry_offset,
-                    proj_offset=[0, 0],
-                    source_offset=[0, 0],
+                    proj_offset=proj_offset,  # [0, 0],
+                    source_offset=source_offset,  # [0, 0],
                     isocenter=[0, 0, 0],
                     image_size=[768, 1024],
                     pixel_spacing=[0.388, 0.388],
@@ -163,25 +165,47 @@ def calibrate_cbct(
                     offset_tol=offset_tol,
                     debug_level=debug_level,
                 )
-                # TEST dopo la prima li inizializzo così, poi ogni tot aggiorno
-                #proj_offset = proj_results["proj_offset"]
-                #source_offset = proj_results["source_offset"]
+                # Update error memory
+                error_memory[1:] = error_memory[:-1]
+                error_memory[0] = proj_results["error"]
 
             # For every other projection, we can simpy use the results of
             # previous view as a starting point, avoiding drag&drop
             else:
                 # initialize geometry (based on previous optimization)
-                proj_offset = proj_results["proj_offset"]
-                source_offset = proj_results["source_offset"]
-
                 if k % drag_every != 0:
-                    """
-                    if k == 1:
-                        # TEST: inizializzo sempre con i risultati della prima proiezione
-                        proj_offset = proj_results["proj_offset"]
-                        source_offset = proj_results["source_offset"]
-                    """
                     # Calibrate other views without drag and drop procedure
+                    proj_results = calibrate_projection(
+                        projection_file=proj_path,
+                        bbs_3d=bbs_3d,
+                        sid=sid,
+                        sdd=sdd,
+                        gantry_angle=gantry_angles[k],
+                        gantry_angle_offset=gantry_offset,
+                        proj_offset=proj_offset,
+                        source_offset=source_offset,
+                        isocenter=[0, 0, 0],
+                        image_size=[768, 1024],
+                        pixel_spacing=[0.388, 0.388],
+                        search_area=15,
+                        search_mode="circle",
+                        drag_and_drop=False,
+                        dlt_estimate=False,
+                        angle_tol=angle_tol,
+                        distance_tol=distance_tol,
+                        offset_tol=offset_tol,
+                        debug_level=debug_level,
+                    )
+                    # Update error memory
+                    error_memory[1:] = error_memory[:-1]
+                    error_memory[0] = proj_results["error"]
+                else:
+                    # TODO valutare se rimuovere l'opzione drag_every, al
+                    # momento si usa solo per fare la ricerca centroidi con
+                    # gli ellissi ogni tot proiezioni.
+
+                    # if "drag-every" parameter is setted, calibration for the
+                    # current view will be performed after drag&drop
                     proj_results = calibrate_projection(
                         projection_file=proj_path,
                         bbs_3d=bbs_3d,
@@ -198,46 +222,38 @@ def calibrate_cbct(
                         search_mode="ellipse",
                         drag_and_drop=False,
                         dlt_estimate=False,
-                        angle_tol=angle_tol,
-                        distance_tol=distance_tol,
-                        offset_tol=offset_tol,
                         debug_level=debug_level,
                     )
-                else:
-                    # if "drag-every" parameter is setted, calibration for the
-                    # current view will be performed after drag&drop
-                    """
-                    proj_results = calibrate_projection(
-                        projection_file=proj_path,
-                        bbs_3d=bbs_3d,
-                        sid=sid,
-                        sdd=sdd,
-                        gantry_angle=gantry_angles[k],
-                        gantry_angle_offset=gantry_offset,
-                        proj_offset=proj_offset,
-                        source_offset=source_offset,
-                        isocenter=[0, 0, 0],
-                        image_size=[768, 1024],
-                        pixel_spacing=[0.388, 0.388],
-                        search_area=15,
-                        search_mode="ellipse",
-                        drag_and_drop=False,
-                        dlt_estimate=True,
-                        debug_level=2,  # debug_level,
-                    )
-                    """
-                    # TEST ogni tot faccio una stima dlt
-                    #proj_offset = proj_results["proj_offset"]
-                    #source_offset = proj_results["source_offset"]
+                    # Update error memory
+                    error_memory[1:] = error_memory[:-1]
+                    error_memory[0] = proj_results["error"]
 
             # Update output results dictionary
             results = update_results(
                 global_res=results, proj_res=proj_results, proj_path=proj_path
             )
-    # TODO inserire lo smoothing dei risultati, per una calibrazione più
-    # stabile e "morbida"
-    temp_save_path = os.path.join(projection_dir, "results.pkl")
 
+            # Choose best offset guess for next proj based on error memory
+            best_memory_index = -(np.argmin(error_memory) + 1)
+            proj_offset = results["proj_offset"][best_memory_index]
+            source_offset = results["source_offset"][best_memory_index]
+            print(
+                f"Index: {best_memory_index} - Min Err: {np.min(error_memory):0.3f}"
+            )
+
+    temp_save_path = os.path.join(projection_dir, "calibration", "results.pkl")
+    temp_save_file = open(temp_save_path, "wb")
+    pickle.dump(results, temp_save_file)
+    temp_save_file.close()
+
+    # TODO valutare se inserire un boolean flag per decidere se fare smoothing
+    logging.info("Smoothing the results...")
+    results = smooth_results(results)
+    logging.info("Result smoothed.")
+
+    temp_save_path = os.path.join(
+        projection_dir, "calibration", "results_smoothed.pkl"
+    )
     temp_save_file = open(temp_save_path, "wb")
     pickle.dump(results, temp_save_file)
     temp_save_file.close()
@@ -292,6 +308,12 @@ def calibrate_2d(
     # Initialize output dictionary
     results = initialize_results()
 
+    # Boundaries
+    # TODO tolerance limits set by user
+    angle_tol = np.deg2rad(1)  # rad
+    distance_tol = 15  # mm
+    offset_tol = 40  # mm
+
     logging.info("Calibrating the system. Please Wait...")
     # Calibrate views
     with click.progressbar(
@@ -311,15 +333,27 @@ def calibrate_2d(
                 gantry_angle_offset=0,
                 proj_offset=proj_offset,
                 source_offset=source_offset,
+                isocenter=[0, 0, 0],
                 image_size=[1536, 2048],
                 pixel_spacing=[0.194, 0.194],
-                search_area=14,
+                search_area=15,
+                search_mode="ellipse",
                 drag_and_drop=True,
+                dlt_estimate=True,
+                angle_tol=angle_tol,
+                distance_tol=distance_tol,
+                offset_tol=offset_tol,
                 debug_level=debug_level,
             )
 
             # Update output dictionary
             results = update_results(results, proj_results, proj_path)
+
+    temp_save_path = os.path.join(projection_dir, "calibration", "results.pkl")
+
+    temp_save_file = open(temp_save_path, "wb")
+    pickle.dump(results, temp_save_file)
+    temp_save_file.close()
 
     return results
 
@@ -431,40 +465,43 @@ def calibrate_projection(
         )
 
         # Starting from the updated coordinates, define a search area around
-        # them and identify the bbs as black pixels inside these areas (brandis
+        # them and identify the bbs as black pixels inside these areas (BBs
         # are used as probes)
-
         if search_mode == "ellipse":
-            bbs_centroid = search_bbs_centroids_ellipse(
+            bbs_centroid = search_bbs_centroids(
                 img=img,
                 ref_2d=bbs_2d_corrected,
                 search_area=search_area,
                 image_size=image_size,
+                mode="ellipse",
                 debug_level=debug_level,
             )
         elif search_mode == "circle":
-            bbs_centroid = search_bbs_centroids_circles(
+            bbs_centroid = search_bbs_centroids(
                 img=img,
                 ref_2d=bbs_2d_corrected,
                 search_area=search_area,
                 image_size=image_size,
+                mode="circle",
                 debug_level=debug_level,
             )
     else:
         if search_mode == "ellipse":
-            bbs_centroid = search_bbs_centroids_ellipse(
+            bbs_centroid = search_bbs_centroids(
                 img=img,
                 ref_2d=bbs_2d,
                 search_area=search_area,
                 image_size=image_size,
+                mode="ellipse",
                 debug_level=debug_level,
             )
         elif search_mode == "circle":
-            bbs_centroid = search_bbs_centroids_circles(
+            bbs_centroid = search_bbs_centroids(
                 img=img,
                 ref_2d=bbs_2d,
                 search_area=search_area,
                 image_size=image_size,
+                mode="circle",
                 debug_level=debug_level,
             )
 
@@ -480,11 +517,11 @@ def calibrate_projection(
     if dlt_estimate is True:
         # Compute DLT to find a starting guess for projection matrix
         dlt_camera_matrix, dlt_err = DLTcalib(
-            nd=3, xyz=bbs_3d, uv=bbs_2d_init, weights=None, uv_ref=None
+            nd=3, xyz=bbs_3d, uv=bbs_2d_init, uv_ref=None
         )
 
         ###dlt_camera_matrix, dlt_err = DLTcalib(
-        ###    nd=3, xyz=bbs_3d, uv=bbs_2d, weights=None, uv_ref=None
+        ###    nd=3, xyz=bbs_3d, uv=bbs_2d, uv_ref=None
         ###)
 
         dlt_parameters = decompose_camera_matrix(
@@ -552,24 +589,12 @@ def calibrate_projection(
         minimizer_results = minimize(
             fcn=compute_bbs_residuals,
             params=starting_guess,
-            # method="tnc",
             method="cobyla",  # seems to be faster than tnc
             args=(bbs_3d, bbs_2d_init, pixel_spacing, isocenter, image_size),
             scale_covar=False,
             calc_covar=False,
-            # nan_policy="propagate"
-            # max_nfev=10000,
         )
-        # debug_level 1
         print("\n-------------------------------")
-        # print("Parameter    Value       Stderr")
-        # for name, param in minimizer_results.params.items():
-        #    print(
-        #        "{:7s} {:11.5f} +/-{:11.5f}".format(
-        #            name, param.value, param.stderr
-        #        )
-        #    )
-        # debug_level 2
         print(fit_report(minimizer_results, show_correl=False, sort_pars=False))
     else:
         logging.error(
@@ -620,7 +645,7 @@ def calibrate_projection(
     )
 
     ls_err = np.mean(np.sqrt(np.sum((bbs_2d_init - bbs_2d_final) ** 2, 1)))
-    print(f"*** Error: {ls_err} ***")
+    print(f"*** Error: {ls_err:0.3f} ***")
     if debug_level > 0:
         print("..........LS...........")
         print(f"Error: {ls_err}\n")
@@ -684,40 +709,25 @@ def calibrate_projection(
         plt.show()
 
     # calculate new source/panel position
-    R_new_base = R.from_euler("zxy", detector_orientation_new).as_matrix().T
-
-    # Referred to isocenter
-    R_new = np.matmul(
-        R_new_base, R.from_euler("zxy", [-90, 0, 0], degrees=True).as_matrix()
-    )
+    R_new = R.from_euler("zxy", detector_orientation_new).as_matrix().T
 
     # source position (X-ray tube)
     source_new = np.matmul(
-        R_new_base,
-        np.array([[source_offset_new[0]], [source_offset_new[1]], [-sid_new]]),
+        R_new,
+        np.array([[source_offset_new[0]], [source_offset_new[1]], [sid_new]]),
     )
 
     # panel position (center of panel)
     panel_new = np.matmul(
-        R_new_base,
+        R_new,
         np.array(
             [
-                [source_offset_new[0] - proj_offset_new[0]],
-                [source_offset_new[1] - proj_offset_new[1]],
-                [sdd_new - sid_new],
+                [proj_offset_new[0]],
+                [proj_offset_new[1]],
+                [-(sdd_new - sid_new)],
             ]
         ),
     )
-
-    # TODO: questo va rivisto
-    # dim_array = np.array([image_size[0] / 2, image_size[1] / 2, 0], ndmin=2)
-    # pixel_array = np.array([pixel_spacing[0], pixel_spacing[1], 1], ndmin=2)
-
-    # offset in local coordinate system
-    # panel_offset_new = dim_array * pixel_array
-
-    # referred to isocenter
-    # panel_offset_new = panel_center_new - np.matmul(R_new, panel_offset_new.T)
 
     # update with new value
     results["gantry_angle"] = gantry_angle
@@ -729,10 +739,9 @@ def calibrate_projection(
     results["source_offset"] = source_offset_new
     results["isocenter"] = isocenter_new
     results["source_3d"] = source_new.flatten()
-    results["panel_3d"] = panel_new.flatten()  # panel_center_new.flatten()
+    results["panel_3d"] = panel_new.flatten()
     results["image_center"] = image_center_new
-    results["detector_rot_matrix"] = R_new_base
-    results["panel_offset"] = panel_new.flatten()  # _offset_new.flatten()
+    results["detector_rot_matrix"] = R_new
     results["error"] = ls_err
 
     return results
@@ -791,13 +800,13 @@ def define_ls_parameters(parameters, angle_tol, offset_tol, distance_tol):
         value=parameters["sid"],
         vary=True,
         min=parameters["sid"] - distance_tol,
-        max=parameters["sid"] + distance_tol,  # + distance_tol,
+        max=parameters["sid"] + distance_tol,
     )
     ls_parameters.add(
         name="idd",
         value=parameters["idd"],
         vary=True,
-        min=parameters["idd"] - distance_tol,  # - distance_tol,
+        min=parameters["idd"] - distance_tol,
         max=parameters["idd"] + distance_tol,
     )
     ls_parameters.add(
@@ -856,6 +865,16 @@ def define_ls_parameters(parameters, angle_tol, offset_tol, distance_tol):
 
 
 def initialize_results():
+    """
+    Initializes the dictionary containing the calibration results.
+
+    Returns
+    -------
+    dict
+        Python standard dictionary containing the results of a calibration.
+        Dictionary has the following keys:
+        TODO: insert table with keys
+    """
     results = {
         "proj_path": [],
         "gantry_angles": [],
@@ -870,7 +889,6 @@ def initialize_results():
         "panel_3d": [],
         "image_center": [],
         "detector_rot_matrix": [],
-        "panel_offset": [],
         "error": [],
     }
 
@@ -891,10 +909,125 @@ def update_results(global_res, proj_res, proj_path):
     global_res["panel_3d"].append(proj_res["panel_3d"])
     global_res["image_center"].append(proj_res["image_center"])
     global_res["detector_rot_matrix"].append(proj_res["detector_rot_matrix"])
-    # global_res["panel_offset"].append(proj_res["panel_offset"])
     global_res["error"].append(proj_res["error"])
 
     return global_res
+
+
+def smooth_results(results, recompute_error=False):
+    # Create a copy for smoothed results
+    smoothed_results = results.copy()
+
+    # Results that don't need any modifications
+    detector_orientation = results["detector_orientation"]
+
+    # Results that has to be smoothed
+    p_off = np.array(results["proj_offset"])
+    s_off = np.array(results["source_offset"])
+    sid = results["sid"]
+    sdd = results["sdd"]
+
+    factor = 1.0
+    window_length = len(p_off) * factor
+
+    if window_length % 2 == 0:
+        window_length -= 1
+
+    polyorder = 5
+    smooth_mode = "mirror"
+
+    px_smoothed = savgol_filter(
+        x=p_off[:, 0],
+        window_length=window_length,
+        polyorder=polyorder,
+        mode=smooth_mode,
+    )
+    py_smoothed = savgol_filter(
+        x=p_off[:, 1],
+        window_length=window_length,
+        polyorder=polyorder,
+        mode=smooth_mode,
+    )
+    sx_smoothed = savgol_filter(
+        x=s_off[:, 0],
+        window_length=window_length,
+        polyorder=polyorder,
+        mode=smooth_mode,
+    )
+    sy_smoothed = savgol_filter(
+        x=s_off[:, 1],
+        window_length=window_length,
+        polyorder=polyorder,
+        mode=smooth_mode,
+    )
+    sid_smoothed = savgol_filter(
+        x=sid,
+        window_length=window_length,
+        polyorder=polyorder,
+        mode=smooth_mode,
+    )
+    sdd_smoothed = savgol_filter(
+        x=sdd,
+        window_length=window_length,
+        polyorder=polyorder,
+        mode=smooth_mode,
+    )
+
+    px_smoothed = np.reshape(px_smoothed, (px_smoothed.shape[0], 1))
+    py_smoothed = np.reshape(py_smoothed, (py_smoothed.shape[0], 1))
+    p_off_smoothed = np.concatenate((px_smoothed, py_smoothed), axis=1).tolist()
+
+    sx_smoothed = np.reshape(sx_smoothed, (sx_smoothed.shape[0], 1))
+    sy_smoothed = np.reshape(sy_smoothed, (sy_smoothed.shape[0], 1))
+    s_off_smoothed = np.concatenate((sx_smoothed, sy_smoothed), axis=1).tolist()
+
+    sid_smoothed = sid_smoothed.tolist()
+    sdd_smoothed = sdd_smoothed.tolist()
+
+    smoothed_results["proj_offset"] = p_off_smoothed
+    smoothed_results["source_offset"] = s_off_smoothed
+    smoothed_results["sid"] = sid_smoothed
+    smoothed_results["sdd"] = sdd_smoothed
+
+    # Update source and panel 3D position
+    panel_3d_smoothed = []
+    source_3d_smoothed = []
+
+    for k in range(len(detector_orientation)):
+        # calculate new source/panel position
+        R_new = R.from_euler("zxy", detector_orientation[k]).as_matrix().T
+
+        # source position (X-ray tube)
+        curr_source_3d_smoothed = np.matmul(
+            R_new,
+            np.array(
+                [
+                    [s_off_smoothed[k][0]],
+                    [s_off_smoothed[k][1]],
+                    [sid_smoothed[k]],
+                ]
+            ),
+        )
+
+        source_3d_smoothed.append(curr_source_3d_smoothed.flatten())
+
+        # panel position (center of panel)
+        curr_panel_3d_smoothed = np.matmul(
+            R_new,
+            np.array(
+                [
+                    [p_off_smoothed[k][0]],
+                    [p_off_smoothed[k][1]],
+                    [-(sdd_smoothed[k] - sid_smoothed[k])],
+                ]
+            ),
+        )
+        panel_3d_smoothed.append(curr_panel_3d_smoothed.flatten())
+
+        smoothed_results["source_3d"] = source_3d_smoothed
+        smoothed_results["panel_3d"] = panel_3d_smoothed
+
+    return smoothed_results
 
 
 def plot_calibration_results(calib_results):
@@ -903,16 +1036,8 @@ def plot_calibration_results(calib_results):
     :param calib_results: dictionary containing results of a calibration
     :type calib_results: dict
     """
-    angles = np.array(calib_results["gantry_angles"])
-    rot = np.array(calib_results["detector_rot_matrix"])
     source_pos = np.array(calib_results["source_3d"])
     panel_pos = np.array(calib_results["panel_3d"])
-
-    print(f"Angle: {angles[0]}")
-    print("Rot matrix:")
-    print(rot[0])
-    print(f"Source: {source_pos[0,:]}")
-    print(f"Panel: {panel_pos[0,:]}")
 
     isocenter = np.array(calib_results["isocenter"])
 
@@ -932,6 +1057,7 @@ def plot_calibration_results(calib_results):
         source_pos[:, 2],
         marker=".",
         c="g",
+        s=2,
         label="Source Position",
     )
 
@@ -941,6 +1067,7 @@ def plot_calibration_results(calib_results):
         panel_pos[:, 2],
         marker=".",
         c="r",
+        s=2,
         label="Panel Position",
     )
 
@@ -1019,28 +1146,47 @@ def plot_calibration_errors(calib_results):
 def plot_offset_variability(calib_results):
     p_off = np.array(calib_results["proj_offset"])
     s_off = np.array(calib_results["source_offset"])
+    sid = np.array(calib_results["sid"])
+    sdd = np.array(calib_results["sdd"])
+    idd = np.array(calib_results["idd"])
 
     def on_key_pressed(event):
         if event.key == "enter":
             plt.close()
 
-    fig, axes = plt.subplots(ncols=2, figsize=(10, 5))
+    fig, axes = plt.subplots(nrows=3, ncols=2, figsize=(10, 5))
     fig.canvas.mpl_connect("key_press_event", on_key_pressed)
 
     ax = axes.ravel()
-    ax[0] = plt.subplot(1, 2, 1)
-    ax[1] = plt.subplot(1, 2, 2)
+    ax[0] = plt.subplot(3, 2, 1)
+    ax[1] = plt.subplot(3, 2, 2)
+    ax[2] = plt.subplot(3, 2, 3)
+    ax[3] = plt.subplot(3, 2, 4)
+    ax[4] = plt.subplot(3, 2, 5)
+    ax[5] = plt.subplot(3, 2, 6)
 
     ax[0].plot(p_off[:, 0], c="r", label="Proj Offset X")
-    ax[0].plot(p_off[:, 1], c="b", label="Proj Offset Y")
     ax[0].plot(s_off[:, 0], c="g", label="Source Offset X")
-    ax[0].plot(s_off[:, 1], c="m", label="Source Offset Y")
-
+    # ax[0].plot(s_off[:, 0] - p_off[:, 0], c="m", label="Difference")
     ax[0].legend()
 
-    ax[1].boxplot(
-        [p_off[:, 0], p_off[:, 1], s_off[:, 0], s_off[:, 1]],
-        labels=["pX", "pY", "sX", "sY"],
+    ax[1].boxplot([p_off[:, 0], s_off[:, 0]], labels=["pX", "sX"])
+
+    ax[2].plot(p_off[:, 1], c="r", label="Proj Offset Y")
+    ax[2].plot(s_off[:, 1], c="g", label="Source Offset Y")
+    # ax[2].plot(p_off[:, 1] - s_off[:, 1], c="m", label="Difference")
+    ax[2].legend()
+
+    ax[3].boxplot([p_off[:, 1], s_off[:, 1]], labels=["pY", "sY"])
+
+    ax[4].plot(sid, c="r", label="sid")
+    ax[4].plot(sdd, c="b", label="sdd")
+    ax[4].plot(idd, c="m", label="idd")
+
+    ax[4].legend()
+
+    ax[5].boxplot(
+        [sid, sdd, idd], labels=["sid", "sdd", "idd"],
     )
 
     plt.show()
@@ -1167,6 +1313,68 @@ def save_lut_planar(path, calib_results):
         elif "RL" in os.path.basename(proj_files[index]):
             rl_index = index
 
+    # Load AP variables
+    rot_matrix_ap = calib_results["detector_rot_matrix"][ap_index]
+    source_offset_ap = calib_results["source_offset"][ap_index]
+    proj_offset_ap = calib_results["proj_offset"][ap_index]
+    sdd_ap = calib_results["sdd"][ap_index]
+    sid_ap = calib_results["sid"][ap_index]
+
+    # Load RL variables
+    rot_matrix_rl = calib_results["detector_rot_matrix"][rl_index]
+    source_offset_rl = calib_results["source_offset"][rl_index]
+    proj_offset_rl = calib_results["proj_offset"][rl_index]
+    sdd_rl = calib_results["sdd"][rl_index]
+    sid_rl = calib_results["sid"][rl_index]
+
+    # Compute Rotation matrix for Room convention
+    rot_matrix_ap = np.matmul(
+        rot_matrix_ap,
+        R.from_euler("zxy", [-90, 0, 0], degrees=True).as_matrix(),
+    )
+
+    rot_matrix_rl = np.matmul(
+        rot_matrix_rl,
+        R.from_euler("zxy", [-90, 0, 0], degrees=True).as_matrix(),
+    )
+
+    # source position (X-ray tube)
+    source_ap = np.matmul(
+        rot_matrix_ap,
+        np.array([[source_offset_ap[0]], [source_offset_ap[1]], [sid_ap]]),
+    )
+
+    source_rl = np.matmul(
+        rot_matrix_rl,
+        np.array([[source_offset_rl[0]], [source_offset_rl[1]], [sid_rl]]),
+    )
+
+    # panel position (center of panel)
+    panel_ap = np.matmul(
+        rot_matrix_ap,
+        np.array(
+            [[proj_offset_ap[0]], [proj_offset_ap[1]], [-(sdd_ap - sid_ap)]]
+        ),
+    )
+
+    panel_rl = np.matmul(
+        rot_matrix_rl,
+        np.array(
+            [[proj_offset_rl[0]], [proj_offset_rl[1]], [-(sdd_rl - sid_rl)]]
+        ),
+    )
+
+    # TODO: questo va pulito
+    mm_dim_array = np.array([[2048 / 2], [1536 / 2], [0]])
+    pixel_dim_array = np.array([[0.194], [0.194], [1]])
+
+    # offset in local coordinate system
+    panel_offset = mm_dim_array * pixel_dim_array
+
+    # referred to isocenter
+    panel_offset_ap = panel_ap - np.matmul(rot_matrix_ap, panel_offset)
+    panel_offset_rl = panel_rl - np.matmul(rot_matrix_rl, panel_offset)
+
     config = configparser.ConfigParser()
     config["GENERAL_R2"] = {}
     config["AP_COUCH"] = {}
@@ -1178,38 +1386,38 @@ def save_lut_planar(path, calib_results):
     general["dimL"] = "1536"
 
     ap_couch = config["AP_COUCH"]
-    ap_couch["sp_0"] = str(calib_results["source"][ap_index][0])
-    ap_couch["sp_1"] = str(calib_results["source"][ap_index][1])
-    ap_couch["sp_2"] = str(calib_results["source"][ap_index][2])
-    ap_couch["A_0"] = str(calib_results["detector_rot_matrix"][ap_index][0][0])
-    ap_couch["A_1"] = str(calib_results["detector_rot_matrix"][ap_index][1][0])
-    ap_couch["A_2"] = str(calib_results["detector_rot_matrix"][ap_index][2][0])
-    ap_couch["A_3"] = str(calib_results["detector_rot_matrix"][ap_index][0][1])
-    ap_couch["A_4"] = str(calib_results["detector_rot_matrix"][ap_index][1][1])
-    ap_couch["A_5"] = str(calib_results["detector_rot_matrix"][ap_index][2][1])
-    ap_couch["A_6"] = str(calib_results["detector_rot_matrix"][ap_index][0][2])
-    ap_couch["A_7"] = str(calib_results["detector_rot_matrix"][ap_index][1][2])
-    ap_couch["A_8"] = str(calib_results["detector_rot_matrix"][ap_index][2][2])
-    ap_couch["A_off_0"] = str(calib_results["panel_offset"][ap_index][0])
-    ap_couch["A_off_1"] = str(calib_results["panel_offset"][ap_index][1])
-    ap_couch["A_off_2"] = str(calib_results["panel_offset"][ap_index][2])
+    ap_couch["sp_0"] = str(float(source_ap[0]))
+    ap_couch["sp_1"] = str(float(source_ap[1]))
+    ap_couch["sp_2"] = str(float(source_ap[2]))
+    ap_couch["A_0"] = str(rot_matrix_ap[0][0])
+    ap_couch["A_1"] = str(rot_matrix_ap[1][0])
+    ap_couch["A_2"] = str(rot_matrix_ap[2][0])
+    ap_couch["A_3"] = str(rot_matrix_ap[0][1])
+    ap_couch["A_4"] = str(rot_matrix_ap[1][1])
+    ap_couch["A_5"] = str(rot_matrix_ap[2][1])
+    ap_couch["A_6"] = str(rot_matrix_ap[0][2])
+    ap_couch["A_7"] = str(rot_matrix_ap[1][2])
+    ap_couch["A_8"] = str(rot_matrix_ap[2][2])
+    ap_couch["A_off_0"] = str(float(panel_offset_ap[0]))
+    ap_couch["A_off_1"] = str(float(panel_offset_ap[1]))
+    ap_couch["A_off_2"] = str(float(panel_offset_ap[2]))
 
     rl_couch = config["RL_COUCH"]
-    rl_couch["sp_0"] = str(calib_results["source"][rl_index][0])
-    rl_couch["sp_1"] = str(calib_results["source"][rl_index][1])
-    rl_couch["sp_2"] = str(calib_results["source"][rl_index][2])
-    rl_couch["A_0"] = str(calib_results["detector_rot_matrix"][rl_index][0][0])
-    rl_couch["A_1"] = str(calib_results["detector_rot_matrix"][rl_index][1][0])
-    rl_couch["A_2"] = str(calib_results["detector_rot_matrix"][rl_index][2][0])
-    rl_couch["A_3"] = str(calib_results["detector_rot_matrix"][rl_index][0][1])
-    rl_couch["A_4"] = str(calib_results["detector_rot_matrix"][rl_index][1][1])
-    rl_couch["A_5"] = str(calib_results["detector_rot_matrix"][rl_index][2][1])
-    rl_couch["A_6"] = str(calib_results["detector_rot_matrix"][rl_index][0][2])
-    rl_couch["A_7"] = str(calib_results["detector_rot_matrix"][rl_index][1][2])
-    rl_couch["A_8"] = str(calib_results["detector_rot_matrix"][rl_index][2][2])
-    rl_couch["A_off_0"] = str(calib_results["panel_offset"][rl_index][0])
-    rl_couch["A_off_1"] = str(calib_results["panel_offset"][rl_index][1])
-    rl_couch["A_off_2"] = str(calib_results["panel_offset"][rl_index][2])
+    rl_couch["sp_0"] = str(float(source_rl[0]))
+    rl_couch["sp_1"] = str(float(source_rl[1]))
+    rl_couch["sp_2"] = str(float(source_rl[2]))
+    rl_couch["A_0"] = str(rot_matrix_rl[0][0])
+    rl_couch["A_1"] = str(rot_matrix_rl[1][0])
+    rl_couch["A_2"] = str(rot_matrix_rl[2][0])
+    rl_couch["A_3"] = str(rot_matrix_rl[0][1])
+    rl_couch["A_4"] = str(rot_matrix_rl[1][1])
+    rl_couch["A_5"] = str(rot_matrix_rl[2][1])
+    rl_couch["A_6"] = str(rot_matrix_rl[0][2])
+    rl_couch["A_7"] = str(rot_matrix_rl[1][2])
+    rl_couch["A_8"] = str(rot_matrix_rl[2][2])
+    rl_couch["A_off_0"] = str(float(panel_offset_rl[0]))
+    rl_couch["A_off_1"] = str(float(panel_offset_rl[1]))
+    rl_couch["A_off_2"] = str(float(panel_offset_rl[2]))
 
     with open(output_file, "w") as configfile:
         config.write(configfile)
