@@ -15,7 +15,7 @@ requirements = [
     "matplotlib==3.3.0",
     "numpy",
     "scipy==1.4.1",
-    "scikit-image==0.15.0",
+    "scikit-image>=0.18.0",
     "Pillow>=6.2.0",
 ]
 

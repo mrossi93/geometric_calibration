@@ -124,9 +124,9 @@ def calibrate_cbct(
 
     # Boundaries
     # TODO tolerance limits set by user
-    angle_tol = np.deg2rad(1)  # rad
-    distance_tol = 15  # mm
-    offset_tol = 40  # mm
+    angle_tol = np.deg2rad(5)  # 1 rad
+    distance_tol = 100  # 15mm
+    offset_tol = 100  # 40mm
 
     # Allocate array for error memory
     memory_dim = 10
@@ -157,7 +157,7 @@ def calibrate_cbct(
                     image_size=[768, 1024],
                     pixel_spacing=[0.388, 0.388],
                     search_area=15,
-                    search_mode="ellipse",
+                    search_mode="circle",
                     drag_and_drop=True,
                     dlt_estimate=True,
                     angle_tol=angle_tol,
@@ -219,7 +219,7 @@ def calibrate_cbct(
                         image_size=[768, 1024],
                         pixel_spacing=[0.388, 0.388],
                         search_area=15,
-                        search_mode="ellipse",
+                        search_mode="circle",
                         drag_and_drop=False,
                         dlt_estimate=False,
                         debug_level=debug_level,
@@ -679,6 +679,9 @@ def calibrate_projection(
 
         # Reference image in background (must stay in position always)
         ax.imshow(img, cmap="gray")
+
+        # TODO aggiungere uno scatterplot blu con le posizioni delle stime DLT
+        # nel caso in cui questa stima venga calcolata.
 
         # Final Position
         ax.scatter(

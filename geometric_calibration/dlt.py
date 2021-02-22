@@ -7,17 +7,15 @@ def Normalization(nd, x):
     Normalization of coordinates (centroid to the origin and mean distance of
     sqrt(2 or 3).
 
-    Input
-    -----
-    nd: number of dimensions, 3 here
-    x: the data to be normalized (directions at different columns and points
-    at rows)
-    Output
-    ------
-    Tr: the transformation matrix (translation plus scaling)
-    x: the transformed data
-    """
+    Args:
+        nd (int): number of dimensions, typically 3
+        x (numpy.array): the data to be normalized (directions at different
+            columns and points at rows)
 
+    Returns:
+        numpy.array, numpy.array: the transformation matrix (translation plus
+            scaling), the transformed data
+    """
     x = np.asarray(x)
     m, s = np.mean(x, 0), np.std(x)
     if nd == 2:
@@ -38,23 +36,26 @@ def DLTcalib(nd, xyz, uv, uv_ref=None):
     """
     Camera calibration by DLT using known object points and their
     corresponding image points.
-
-    Input
-    -----
-    nd: dimensions of the object space, 3 here.
-    xyz: coordinates in the object 3D space.
-    uv: coordinates in the image 2D space.
-
     The coordinates (x,y,z and u,v) are given as columns and the different
     points as rows.
-
     There must be at least 6 calibration points for the 3D DLT.
 
-    Output
-    ------
-     L: array of 11 parameters of the calibration matrix.
-     err: error of the DLT (mean residual of the DLT transformation in units
-     of camera coordinates).
+    Args:
+        nd (int): dimensions of the object space, typically 3
+        xyz (numpy.array): coordinates in the object 3D space
+        uv (numpy.array): coordinates in the image 2D space
+        uv_ref (numpy.array, optional): [description]. Defaults to None.
+
+    Raises:
+        ValueError: Dimension not supported
+        ValueError: xyz and uv have different number of points
+        ValueError: Wrong dimension for coordinates
+        ValueError: Insufficient number of points
+
+    Returns:
+        numpy.array, float: array of 11 parameters of the calibration matrix,
+            followed by error of the DLT (mean residual of the DLT
+            transformation in units of camera coordinates).
     """
     if nd != 3:
         raise ValueError(f"{nd}D DLT unsupported.")
