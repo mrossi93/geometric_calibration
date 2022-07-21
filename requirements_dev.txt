@@ -14,5 +14,5 @@ pytest-runner==5.2
 black==19.10b0
 scipy==1.5.1
 numpy==1.19.1
-matplotlib==3.3.0
+matplotlib==3.5.2
 PyInstaller==3.6
