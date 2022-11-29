@@ -153,7 +153,7 @@ def decompose_camera_matrix(L, image_size, pixel_spacing):
 
     fx = np.sqrt((L[0] ** 2 + L[1] ** 2 + L[2] ** 2) * LL ** 2 - xp ** 2)
     fy = np.sqrt((L[4] ** 2 + L[5] ** 2 + L[6] ** 2) * LL ** 2 - yp ** 2)
-    sdd = ((fx * 0.388) + (fy * 0.388)) / 2
+    sdd = ((fx * pixel_spacing[0]) + (fy * pixel_spacing[1])) / 2
 
     K = np.array([[fx, 0, xp], [0, fy, yp], [0, 0, 1]])
     invK = np.linalg.inv(K)

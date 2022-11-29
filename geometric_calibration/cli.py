@@ -4,7 +4,7 @@ import os
 import logging
 import click
 import click_config_file
-from geometric_calibration.reader import read_bbs_ref_file
+from geometric_calibration.reader import read_bbs_ref_file, read_fix_poly
 from geometric_calibration.geometric_calibration import (
     calibrate_cbct,
     calibrate_2d,
@@ -26,10 +26,8 @@ if getattr(sys, "frozen", False):
 else:
     APPLICATION_PATH = os.path.dirname(os.path.abspath(__file__))
 
-
-REF_BBS_DEFAULT_PATH = os.path.join(
-    APPLICATION_PATH, "app_data", "ref_brandis.txt"
-)
+APP_DATA_PATH = os.path.join(APPLICATION_PATH, "app_data")
+REF_BBS_DEFAULT_PATH = os.path.join(APP_DATA_PATH, "ref_brandis.txt")
 
 
 def save_cli(path, results, mode):
@@ -115,6 +113,36 @@ def save_cli(path, results, mode):
     default=1672.2,
 )
 @click.option(
+    "--px",
+    type=click.FLOAT,
+    help="Nominal Detector offset on X axis in mm",
+    default=0.0,
+)
+@click.option(
+    "--py",
+    type=click.FLOAT,
+    help="Nominal Detector offset on Y axis in mm",
+    default=0.0,
+)
+@click.option(
+    "--sx",
+    type=click.FLOAT,
+    help="Nominal Source offset on X axis in mm",
+    default=0.0,
+)
+@click.option(
+    "--sy",
+    type=click.FLOAT,
+    help="Nominal Source offset on Y axis in mm",
+    default=0.0,
+)
+@click.option(
+    "--eccentric",
+    type=click.BOOL,
+    help="Projections are acquired in eccentric mode (need to fix imgLabels angles)",
+    default=False,
+)
+@click.option(
     "--drag_every",
     type=click.INT,
     help="Manually reposition the reference points every N projections",
@@ -134,11 +162,23 @@ def save_cli(path, results, mode):
     default=REF_BBS_DEFAULT_PATH,
 )
 @click_config_file.configuration_option()
-def main(mode, input_path, sid, sdd, drag_every, debug_level, ref):
+def main(
+    mode,
+    input_path,
+    sid,
+    sdd,
+    px,
+    py,
+    sx,
+    sy,
+    eccentric,
+    drag_every,
+    debug_level,
+    ref,
+):
     """Console script for geometric_calibration.
 
     Author: Matteo Rossi"""
-
     # Create folder for output files if it does not exit already
     results_dir = os.path.join(input_path, "calibration")
     try:
@@ -172,8 +212,24 @@ def main(mode, input_path, sid, sdd, drag_every, debug_level, ref):
     Mode: {mode}
     Input Path: {input_path}
     SID: {sid}
-    SDD: {sdd}"""
+    SDD: {sdd}
+    Detector offset: {px}, {py}
+    Source offset: {sx}, {sy}"""
     )
+
+    if eccentric:
+        logging.info(
+            "Eccentric mode detected. Loading polynomial for gantry angles fix..."
+        )
+        eccentric_poly = read_fix_poly(
+            # os.path.join(APP_DATA_PATH, f"poly5_r{int(sx)}.npy")
+            os.path.join(
+                APP_DATA_PATH, f"poly5_r80_360.npy"
+            )  #!!! cambiato solo per test con ecc360
+        )
+        logging.info("Polynomial for gantry angles fix loaded.")
+    else:
+        eccentric_poly = None
 
     # Just to avoid division by zero, in case user wrongly set this parameter
     if drag_every == 0:
@@ -193,10 +249,11 @@ def main(mode, input_path, sid, sdd, drag_every, debug_level, ref):
             bbs_3d=bbs,
             sid=sid,
             sdd=sdd,
-            proj_offset=[0, 0],
-            source_offset=[0, 0],
+            proj_offset=[px, py],
+            source_offset=[sx, sy],
             drag_every=drag_every,
             debug_level=debug_level,
+            eccentric_poly=eccentric_poly,
         )
     elif mode == "2d":
         calibration_results = calibrate_2d(
@@ -204,8 +261,8 @@ def main(mode, input_path, sid, sdd, drag_every, debug_level, ref):
             bbs_3d=bbs,
             sid=sid,
             sdd=sdd,
-            proj_offset=[0, 0],
-            source_offset=[0, 0],
+            proj_offset=[px, py],
+            source_offset=[sx, sy],
             debug_level=debug_level,
         )
     else:

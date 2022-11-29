@@ -37,10 +37,11 @@ def calibrate_cbct(
     bbs_3d,
     sid,
     sdd,
-    proj_offset=[0, 0],
-    source_offset=[0, 0],
+    proj_offset,
+    source_offset,
     drag_every=0,
     debug_level=0,
+    eccentric_poly=None,
 ):
     """Main CBCT Calibration routines.
 
@@ -140,6 +141,12 @@ def calibrate_cbct(
             # path of the current image
             proj_path = os.path.join(projection_dir, proj_files[k])
 
+            # Fix gantry angle if mode is cbct eccentric
+            if eccentric_poly is None:
+                gantry_angle = gantry_angles[k]
+            else:
+                gantry_angle = eccentric_poly(gantry_angles[k])
+
             # For first projection, we have only the nominal values, so we need
             # to manually correct bbs position with drag&drop
             if k == 0:
@@ -149,7 +156,7 @@ def calibrate_cbct(
                     bbs_3d=bbs_3d,
                     sid=sid,
                     sdd=sdd,
-                    gantry_angle=gantry_angles[k],
+                    gantry_angle=gantry_angle,
                     gantry_angle_offset=gantry_offset,
                     proj_offset=proj_offset,  # [0, 0],
                     source_offset=source_offset,  # [0, 0],
@@ -157,9 +164,10 @@ def calibrate_cbct(
                     image_size=[768, 1024],
                     pixel_spacing=[0.388, 0.388],
                     search_area=15,
-                    search_mode="circle",
                     drag_and_drop=True,
-                    dlt_estimate=True,
+                    dlt_estimate=False,
+                    min_radius=2,
+                    max_radius=8,
                     angle_tol=angle_tol,
                     distance_tol=distance_tol,
                     offset_tol=offset_tol,
@@ -180,7 +188,7 @@ def calibrate_cbct(
                         bbs_3d=bbs_3d,
                         sid=sid,
                         sdd=sdd,
-                        gantry_angle=gantry_angles[k],
+                        gantry_angle=gantry_angle,
                         gantry_angle_offset=gantry_offset,
                         proj_offset=proj_offset,
                         source_offset=source_offset,
@@ -188,9 +196,10 @@ def calibrate_cbct(
                         image_size=[768, 1024],
                         pixel_spacing=[0.388, 0.388],
                         search_area=15,
-                        search_mode="circle",
                         drag_and_drop=False,
                         dlt_estimate=False,
+                        min_radius=2,
+                        max_radius=8,
                         angle_tol=angle_tol,
                         distance_tol=distance_tol,
                         offset_tol=offset_tol,
@@ -211,7 +220,7 @@ def calibrate_cbct(
                         bbs_3d=bbs_3d,
                         sid=sid,
                         sdd=sdd,
-                        gantry_angle=gantry_angles[k],
+                        gantry_angle=gantry_angle,
                         gantry_angle_offset=gantry_offset,
                         proj_offset=proj_offset,
                         source_offset=source_offset,
@@ -219,9 +228,13 @@ def calibrate_cbct(
                         image_size=[768, 1024],
                         pixel_spacing=[0.388, 0.388],
                         search_area=15,
-                        search_mode="circle",
                         drag_and_drop=False,
                         dlt_estimate=False,
+                        min_radius=2,
+                        max_radius=8,
+                        angle_tol=angle_tol,
+                        distance_tol=distance_tol,
+                        offset_tol=offset_tol,
                         debug_level=debug_level,
                     )
                     # Update error memory
@@ -230,7 +243,10 @@ def calibrate_cbct(
 
             # Update output results dictionary
             results = update_results(
-                global_res=results, proj_res=proj_results, proj_path=proj_path
+                global_res=results,
+                proj_res=proj_results,
+                proj_path=proj_path,
+                robot_gantry_angle=gantry_angles[k],
             )
 
             # Choose best offset guess for next proj based on error memory
@@ -261,14 +277,121 @@ def calibrate_cbct(
     return results
 
 
+def calibrate_2d_new(
+    projection_dir, bbs_3d, sid, sdd, proj_offset, source_offset, debug_level=0,
+):
+    """Main 2D Calibration routines.
+
+    :param projection_dir: path to directory containing .raw files
+    :type projection_dir: str
+    :param bbs_3d: array containing 3D coordinates of BBs
+    :type bbs_3d: numpy.array
+    :param sid: nominal source to isocenter (A) distance
+    :type sid: float
+    :param sdd: nominal source to image distance
+    :type sdd: float
+    :return: dictionary with calibration results
+    :rtype: dict
+    """
+    # RCS: room coordinate system
+    # A: isocenter
+
+    # Find projection files in the current folder
+    proj_file = []
+    gantry_angles = []
+
+    ap_file = None
+    rl_file = None
+
+    for f in os.listdir(projection_dir):
+        if (".raw" in f) or (".hnc" in f):
+            if "AP" in f:
+                ap_file = os.path.join(projection_dir, f)
+            if "RL" in f:
+                rl_file = os.path.join(projection_dir, f)
+
+    if (ap_file is None) or (rl_file is None):
+        logging.error(
+            """AP and RL projection not found.\nPlease check input_path parameter in configuration file."""
+        )
+        sys.exit(1)
+
+    # Initialize output dictionary
+    results = initialize_results()
+
+    # Boundaries
+    # TODO tolerance limits set by user
+    angle_tol = np.deg2rad(5)  # 1 rad
+    distance_tol = 100  # 15mm
+    offset_tol = 100  # 40mm
+
+    logging.info("Calibrating the system. Please Wait...")
+
+    # Calibrate AP view
+    ap_results = calibrate_projection(
+        projection_file=ap_file,
+        bbs_3d=bbs_3d,
+        sid=sid,
+        sdd=sdd,
+        gantry_angle=0,
+        gantry_angle_offset=0,
+        proj_offset=proj_offset,
+        source_offset=source_offset,
+        isocenter=[0, 0, 0],
+        image_size=[1536, 2048],
+        pixel_spacing=[0.194, 0.194],
+        search_area=15,
+        drag_and_drop=True,
+        dlt_estimate=True,
+        min_radius=3,
+        max_radius=8,
+        angle_tol=angle_tol,
+        distance_tol=distance_tol,
+        offset_tol=offset_tol,
+        debug_level=debug_level,
+    )
+
+    # Update output dictionary
+    results = update_results(results, ap_results, ap_file)
+
+    # Calibrate AP view
+    rl_results = calibrate_projection(
+        projection_file=rl_file,
+        bbs_3d=bbs_3d,
+        sid=sid,
+        sdd=sdd,
+        gantry_angle=90,
+        gantry_angle_offset=0,
+        proj_offset=results["proj_offset"][0],
+        source_offset=results["source_offset"][0],
+        isocenter=[0, 0, 0],
+        image_size=[1536, 2048],
+        pixel_spacing=[0.194, 0.194],
+        search_area=15,
+        drag_and_drop=False,
+        dlt_estimate=False,
+        min_radius=3,
+        max_radius=8,
+        angle_tol=angle_tol,
+        distance_tol=distance_tol,
+        offset_tol=offset_tol,
+        debug_level=debug_level,
+    )
+
+    # Update output dictionary
+    results = update_results(results, rl_results, rl_file)
+
+    temp_save_path = os.path.join(projection_dir, "calibration", "results.pkl")
+
+    temp_save_file = open(temp_save_path, "wb")
+    pickle.dump(results, temp_save_file)
+    temp_save_file.close()
+
+    return results
+
+
 def calibrate_2d(
-    projection_dir,
-    bbs_3d,
-    sid,
-    sdd,
-    proj_offset=[0, 0],
-    source_offset=[0, 0],
-    debug_level=0,
+    projection_dir, bbs_3d, sid, sdd, proj_offset, source_offset, debug_level=0,
 ):
     """Main 2D Calibration routines.
 
@@ -310,9 +433,9 @@ def calibrate_2d(
 
     # Boundaries
     # TODO tolerance limits set by user
-    angle_tol = np.deg2rad(1)  # rad
-    distance_tol = 15  # mm
-    offset_tol = 40  # mm
+    angle_tol = np.deg2rad(10)  # 1 rad
+    distance_tol = 200  # 15mm
+    offset_tol = 200  # 40mm
 
     logging.info("Calibrating the system. Please Wait...")
     # Calibrate views
@@ -337,9 +460,10 @@ def calibrate_2d(
                 image_size=[1536, 2048],
                 pixel_spacing=[0.194, 0.194],
                 search_area=15,
-                search_mode="ellipse",
                 drag_and_drop=True,
                 dlt_estimate=True,
+                min_radius=2,
+                max_radius=15,  # 8,  #
                 angle_tol=angle_tol,
                 distance_tol=distance_tol,
                 offset_tol=offset_tol,
@@ -373,9 +497,10 @@ def calibrate_projection(
     image_size=[768, 1024],
     pixel_spacing=[0.388, 0.388],
     search_area=7,
-    search_mode="circle",
     drag_and_drop=True,
     dlt_estimate=True,
+    min_radius=2,  # min radius for BBs circles in pixel
+    max_radius=8,  # max radius for BBs circles in pixel
     angle_tol=0.01745,  # rad -> 1°
     distance_tol=10,  # mm
     offset_tol=10,  # mm
@@ -467,43 +592,25 @@ def calibrate_projection(
         # Starting from the updated coordinates, define a search area around
         # them and identify the bbs as black pixels inside these areas (BBs
         # are used as probes)
-        if search_mode == "ellipse":
-            bbs_centroid = search_bbs_centroids(
-                img=img,
-                ref_2d=bbs_2d_corrected,
-                search_area=search_area,
-                image_size=image_size,
-                mode="ellipse",
-                debug_level=debug_level,
-            )
-        elif search_mode == "circle":
-            bbs_centroid = search_bbs_centroids(
-                img=img,
-                ref_2d=bbs_2d_corrected,
-                search_area=search_area,
-                image_size=image_size,
-                mode="circle",
-                debug_level=debug_level,
-            )
+        bbs_centroid = search_bbs_centroids(
+            img=img,
+            ref_2d=bbs_2d_corrected,
+            search_area=search_area,
+            image_size=image_size,
+            min_radius=min_radius,
+            max_radius=max_radius,
+            debug_level=debug_level,
+        )
     else:
-        if search_mode == "ellipse":
-            bbs_centroid = search_bbs_centroids(
-                img=img,
-                ref_2d=bbs_2d,
-                search_area=search_area,
-                image_size=image_size,
-                mode="ellipse",
-                debug_level=debug_level,
-            )
-        elif search_mode == "circle":
-            bbs_centroid = search_bbs_centroids(
-                img=img,
-                ref_2d=bbs_2d,
-                search_area=search_area,
-                image_size=image_size,
-                mode="circle",
-                debug_level=debug_level,
-            )
+        bbs_centroid = search_bbs_centroids(
+            img=img,
+            ref_2d=bbs_2d,
+            search_area=search_area,
+            image_size=image_size,
+            min_radius=min_radius,
+            max_radius=max_radius,
+            debug_level=debug_level,
+        )
 
     # Extract only reliable centroids
     good_bbs_index = np.where(~np.isnan(bbs_centroid[:, 0]))[0]
@@ -585,7 +692,7 @@ def calibrate_projection(
     # Solve minimization problem
     # TODO Capire qual è il reale minimo numero di punti per portare a termine
     # la calibrazione
-    if good_bbs_index.shape[0] >= 10:  # at least 10 BBs
+    if good_bbs_index.shape[0] >= 3:  # at least 10 BBs
         minimizer_results = minimize(
             fcn=compute_bbs_residuals,
             params=starting_guess,
@@ -733,7 +840,6 @@ def calibrate_projection(
     )
 
     # update with new value
-    results["gantry_angle"] = gantry_angle
     results["detector_orientation"] = detector_orientation_new
     results["sdd"] = sdd_new
     results["sid"] = sid_new
@@ -827,7 +933,13 @@ def define_ls_parameters(parameters, angle_tol, offset_tol, distance_tol):
         min=parameters["oa"] - angle_tol,
         max=parameters["oa"] + angle_tol,
     )
-    ls_parameters.add(name="ga", value=parameters["ga"], vary=False)
+    ls_parameters.add(
+        name="ga",
+        value=parameters["ga"],
+        vary=True,
+        min=parameters["ga"] - angle_tol,
+        max=parameters["ga"] + angle_tol,
+    )
     ls_parameters.add(
         name="ia",
         value=parameters["ia"],
@@ -898,9 +1010,9 @@ def initialize_results():
     return results
 
 
-def update_results(global_res, proj_res, proj_path):
+def update_results(global_res, proj_res, proj_path, robot_gantry_angle):
     global_res["proj_path"].append(proj_path)
-    global_res["gantry_angles"].append(proj_res["gantry_angle"])
+    global_res["gantry_angles"].append(robot_gantry_angle)
     global_res["detector_orientation"].append(proj_res["detector_orientation"])
     global_res["sdd"].append(proj_res["sdd"])
     global_res["sid"].append(proj_res["sid"])
@@ -917,7 +1029,7 @@ def update_results(global_res, proj_res, proj_path):
     return global_res
 
 
-def smooth_results(results, recompute_error=False):
+def smooth_results(results):
     # Create a copy for smoothed results
     smoothed_results = results.copy()
 
@@ -1080,7 +1192,7 @@ def plot_calibration_results(calib_results):
         source_pos[0, 2],
         marker="x",
         c="g",
-        label="Source Position",
+        label="First Source Position",
     )
 
     ax.scatter(
@@ -1089,7 +1201,7 @@ def plot_calibration_results(calib_results):
         panel_pos[0, 2],
         marker="x",
         c="r",
-        label="Panel Position",
+        label="First Panel Position",
     )
 
     ax.scatter(
@@ -1133,6 +1245,8 @@ def plot_calibration_errors(calib_results):
     ax[0] = plt.subplot(1, 2, 1)
     ax[1] = plt.subplot(1, 2, 2)
 
+    errors = errors * 0.388
+
     ax[0].scatter(
         range(len(errors)),
         errors[:],
@@ -1140,9 +1254,10 @@ def plot_calibration_errors(calib_results):
         # label="Source Position",
     )
 
-    ax[1].boxplot(errors)
+    ax[1].boxplot(errors, showfliers=False)
     # plt.hlines(y=1, xmin=0, xmax=len(errors))
 
+    ax[0].set_ylim([0, 3])
     plt.show()
 
 
@@ -1173,14 +1288,18 @@ def plot_offset_variability(calib_results):
     # ax[0].plot(s_off[:, 0] - p_off[:, 0], c="m", label="Difference")
     ax[0].legend()
 
-    ax[1].boxplot([p_off[:, 0], s_off[:, 0]], labels=["pX", "sX"])
+    ax[1].boxplot(
+        [p_off[:, 0], s_off[:, 0]], labels=["pX", "sX"], showfliers=False,
+    )
 
     ax[2].plot(p_off[:, 1], c="r", label="Proj Offset Y")
     ax[2].plot(s_off[:, 1], c="g", label="Source Offset Y")
     # ax[2].plot(p_off[:, 1] - s_off[:, 1], c="m", label="Difference")
     ax[2].legend()
 
-    ax[3].boxplot([p_off[:, 1], s_off[:, 1]], labels=["pY", "sY"])
+    ax[3].boxplot(
+        [p_off[:, 1], s_off[:, 1]], labels=["pY", "sY"], showfliers=False,
+    )
 
     ax[4].plot(sid, c="r", label="sid")
     ax[4].plot(sdd, c="b", label="sdd")
@@ -1189,7 +1308,7 @@ def plot_offset_variability(calib_results):
     ax[4].legend()
 
     ax[5].boxplot(
-        [sid, sdd, idd], labels=["sid", "sdd", "idd"],
+        [sid, sdd, idd], labels=["sid", "sdd", "idd"], showfliers=False,
     )
 
     plt.show()
@@ -1307,6 +1426,7 @@ def save_lut(path, calib_results, style="complete"):
 
 
 def save_lut_planar(path, calib_results):
+    # TODO: verificare i segni di Source
     output_file = os.path.join(path, "geometryCalibration.ini")
 
     proj_files = calib_results["proj_path"]
@@ -1379,6 +1499,7 @@ def save_lut_planar(path, calib_results):
     panel_offset_rl = panel_rl - np.matmul(rot_matrix_rl, panel_offset)
 
     config = configparser.ConfigParser()
+
     config["GENERAL_R2"] = {}
     config["AP_COUCH"] = {}
     config["RL_COUCH"] = {}

@@ -12,10 +12,13 @@ with open("HISTORY.rst") as history_file:
 
 requirements = [
     "Click>=7.0",
-    "matplotlib==3.3.0",
+    "click-config-file",
+    "lmfit",
+    "numdifftools",
+    "matplotlib",  # ==3.3.0",
     "numpy",
-    "scipy==1.4.1",
-    "scikit-image>=0.18.0",
+    "scipy",  # ==1.4.1",
+    "scikit-image",  # >=0.18.0",
     "Pillow>=6.2.0",
 ]
 

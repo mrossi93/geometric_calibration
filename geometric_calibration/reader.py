@@ -91,3 +91,7 @@ def read_projection_hnc(filename, dim):
         image.shape = (dim[1], dim[0])
 
     return image
+
+
+def read_fix_poly(filename):
+    return np.poly1d(np.load(filename))

@@ -210,7 +210,15 @@ def drag_and_drop_bbs(projection, bbs_projected):
 
 
 def search_bbs_centroids(
-    img, ref_2d, search_area, image_size, mode, debug_level=0
+    img,
+    ref_2d,
+    search_area,
+    image_size,
+    min_radius,
+    max_radius,
+    proximity_tol=None,
+    min_samples=3,
+    debug_level=0,
 ):
     """
     Search bbs based on projection.
@@ -233,6 +241,9 @@ def search_bbs_centroids(
             Ellipse is slower but provide better results in general.
         debug_level (int, optional): Level for debug messages, 0 means no
             debug messages, 1 light debug and 2 hard debug. Defaults to 0.
+        proximity_tol (int): pixel tolerance to consider two BBs too close
+        min_samples (int, optional): min number of points for ransac circle identification.
+            Defaults to 3.
 
     Returns:
         numpy.array: Nx2 array containing coordinates for every centroids found
@@ -243,8 +254,8 @@ def search_bbs_centroids(
         if event.key == "enter":
             plt.close()
 
-    # TODO valutare se duplicate_tol può diventare un paramentro della funzione
-    duplicate_tol = 10  # pixel tolerance to consider two BBs too close
+    if proximity_tol is None:
+        proximity_tol = search_area * 1.1
 
     for i in range(len(ref_2d)):
         if np.isnan(ref_2d[i][0]):
@@ -253,8 +264,8 @@ def search_bbs_centroids(
         for j in range(i + 1, len(ref_2d)):
             if np.isnan(ref_2d[j][0]):
                 continue
-            if (np.abs(ref_2d[i][0] - ref_2d[j][0]) < duplicate_tol) and (
-                np.abs(ref_2d[i][1] - ref_2d[j][1]) < duplicate_tol
+            if (np.abs(ref_2d[i][0] - ref_2d[j][0]) < proximity_tol) and (
+                np.abs(ref_2d[i][1] - ref_2d[j][1]) < proximity_tol
             ):
                 ref_2d[i][:] = [np.nan, np.nan]
                 ref_2d[j][:] = [np.nan, np.nan]
@@ -301,14 +312,18 @@ def search_bbs_centroids(
         edges = canny(sub_img, sigma=1.5)  # 1.5 per ellisse
         # edges = canny(sub_img, sigma=2) # per cerchio
 
-        # label image regions
+        # Label connected regions inside edges original image
         label_image, num_label = label(edges, return_num=True)
 
         coords = []
+
+        # Label 0 is always background, skip it
         for i in range(1, num_label + 1):
+            # Create a temp image with a single connected region edges
             temp_edges = np.zeros(sub_img.shape)
             temp_edges[label_image == i] = 1
 
+            # Extract coordinates of temp_edges
             temp_coords = np.column_stack(np.nonzero(temp_edges))
             if len(temp_coords) != 0:
                 coords.append(temp_coords)
@@ -321,121 +336,75 @@ def search_bbs_centroids(
                 print("No edges identified")
             continue
 
-        if mode == "ellipse":
-            model, inliers = ransac(
-                coords,
-                EllipseModel,
-                min_samples=3,
-                residual_threshold=1,
-                max_trials=100,
-            )
+        # TODO Valutare se rimuovere la modalità ellipse. Al momento non funziona
+        # e in generale è comunque più lenta del cerchio.
+        cx_list = []
+        cy_list = []
+        radius_list = []
+        for coord in coords:
+            model = None
+            if len(coord) <= min_samples:
+                pass
+            else:
+                model, inliers = ransac(
+                    coord,
+                    CircleModel,
+                    min_samples=min_samples,
+                    residual_threshold=0.5,
+                    max_trials=100,
+                )
 
             if model is None:
-                if debug_level >= 1:
-                    print("BB discarded: no ellipse found")
-                cx = 0.0
-                cy = 0.0
-                a = 0.0
-                b = 0.0
-                t = 0.0
-                bbs_centroid.append([np.nan, np.nan])
+                pass
             else:
-                cx, cy, a, b, t = [x for x in model.params]
+                cx_list.append(model.params[0])
+                cy_list.append(model.params[1])
+                radius_list.append(model.params[2])
 
-                if a > b:
-                    eccentricity = np.sqrt(1 - (b / a) ** 2)
-                else:
-                    # When orientation is not in [-pi:pi] the function
-                    # hough_ellipse returns a and b swapped.
-                    eccentricity = np.sqrt(1 - (a / b) ** 2)
+        if len(cx_list) == 0:
+            if debug_level >= 1:
+                print("BB discarded: no ellipse found")
+            cx = 0.0
+            cy = 0.0
+            radius = 0.1
+            bbs_centroid.append([np.nan, np.nan])
+        else:
+            radius_list_clean = np.array(radius_list)
+            radius_list_clean[
+                (radius_list_clean < min_radius)
+                | (radius_list_clean > max_radius)
+            ] = 1000.0  # placeholder for impossible radius
+            best_radius = np.nanargmin(radius_list_clean)
+            cx = cx_list[best_radius]
+            cy = cy_list[best_radius]
+            radius = radius_list_clean[best_radius]
 
-                if eccentricity > 0.5:
-                    if debug_level >= 1:
-                        print("BB discarded: eccentricity is too high")
-                    cx = 0.0
-                    cy = 0.0
-                    a = 0.0
-                    b = 0.0
-                    t = 0.0
-                    bbs_centroid.append([np.nan, np.nan])
-                else:
-                    bbs_centroid.append([min_col + cx, min_row + cy])
-                    if debug_level >= 2:
-                        print("---------")
-                        print(f"Cx: {cx}, Cy: {cy}")
-                        print(f"a: {a}, b: {b}")
-                        print(f"Orientation: {t}")
-                        print(f"Eccentricity: {eccentricity}")
-                        print("---------")
-
-            edges = color.gray2rgb(img_as_ubyte(edges))
-            sub_img_cont = np.ones(sub_img.shape)
-            sub_img_cont = color.gray2rgb(sub_img_cont)
-
-            # fill ellipse
-            rr, cc = ellipse(cx, cy, a, b, sub_img.shape, rotation=t)
-            sub_img_cont[rr, cc, :] = (1, 1, 0)
-        elif mode == "circle":
-            cx_list = []
-            cy_list = []
-            radius_list = []
-            for coord in coords:
-                if len(coord) <= 3:
-                    pass
-                else:
-                    model = None
-                    model, inliers = ransac(
-                        coord,
-                        CircleModel,
-                        min_samples=3,
-                        residual_threshold=1,
-                        max_trials=100,
+            if radius == 1000.0:
+                if debug_level >= 1:
+                    print(
+                        f"BBs discarded. Radius {radius_list[best_radius]:.3f} out of acceptable range [{min_radius}, {max_radius}]"
                     )
-
-                if model is None:
-                    pass
-                else:
-                    cx_list.append(model.params[0])
-                    cy_list.append(model.params[1])
-                    radius_list.append(model.params[2])
-
-            if len(cx_list) == 0:
-                if debug_level >= 1:
-                    print("BB discarded: no ellipse found")
                 cx = 0.0
                 cy = 0.0
-                radius = 0.0
+                radius = 0.1
                 bbs_centroid.append([np.nan, np.nan])
             else:
-                best_radius = np.argmin(radius_list)
-                cx = cx_list[best_radius]
-                cy = cy_list[best_radius]
-                radius = radius_list[best_radius]
+                # cx, cy, radius = [x for x in model.params]
+                if debug_level >= 2:
+                    print("---------")
+                    print(f"Cx: {cx:.3f}, Cy: {cy:.3f}")
+                    print(f"Radius: {radius:.3f}")
+                    print("---------")
+                bbs_centroid.append([min_col + cy, min_row + cx])
 
-                if radius > 6:
-                    if debug_level >= 1:
-                        print("BBs discarded. Radius too big")
-                    cx = 0.0
-                    cy = 0.0
-                    radius = 0.0
-                    bbs_centroid.append([np.nan, np.nan])
-                else:
-                    # cx, cy, radius = [x for x in model.params]
-                    if debug_level >= 2:
-                        print("---------")
-                        print(f"Cx: {cx}, Cy: {cy}")
-                        print(f"Radius: {radius}")
-                        print("---------")
-                    bbs_centroid.append([min_col + cy, min_row + cx])
+        edges = color.gray2rgb(img_as_ubyte(edges))
 
-            edges = color.gray2rgb(img_as_ubyte(edges))
+        sub_img_cont = np.ones(sub_img.shape)
+        sub_img_cont = color.gray2rgb(sub_img_cont)
 
-            sub_img_cont = np.ones(sub_img.shape)
-            sub_img_cont = color.gray2rgb(sub_img_cont)
-
-            # fill circle
-            rr, cc = disk((cx, cy), radius, shape=sub_img.shape)
-            sub_img_cont[rr, cc, :] = (1, 1, 0)
+        # fill circle
+        rr, cc = disk((cx, cy), radius, shape=sub_img.shape)
+        sub_img_cont[rr, cc, :] = (1, 1, 0)
 
         if debug_level == 2:
             fig, axes = plt.subplots(ncols=3, figsize=(8, 2.5))
@@ -470,9 +439,9 @@ def search_bbs_centroids(
             if np.isnan(bbs_centroid[j][0]):
                 continue
             if (
-                np.abs(bbs_centroid[i][0] - bbs_centroid[j][0]) < duplicate_tol
+                np.abs(bbs_centroid[i][0] - bbs_centroid[j][0]) < proximity_tol
             ) and (
-                np.abs(bbs_centroid[i][1] - bbs_centroid[j][1]) < duplicate_tol
+                np.abs(bbs_centroid[i][1] - bbs_centroid[j][1]) < proximity_tol
             ):
                 bbs_centroid[i][:] = [np.nan, np.nan]
                 bbs_centroid[j][:] = [np.nan, np.nan]
