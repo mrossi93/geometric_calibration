@@ -41,7 +41,6 @@ def calibrate_cbct(
     source_offset,
     drag_every=0,
     debug_level=0,
-    eccentric_poly=None,
 ):
     """Main CBCT Calibration routines.
 
@@ -141,11 +140,7 @@ def calibrate_cbct(
             # path of the current image
             proj_path = os.path.join(projection_dir, proj_files[k])
 
-            # Fix gantry angle if mode is cbct eccentric
-            if eccentric_poly is None:
-                gantry_angle = gantry_angles[k]
-            else:
-                gantry_angle = eccentric_poly(gantry_angles[k])
+            gantry_angle = gantry_angles[k]
 
             # For first projection, we have only the nominal values, so we need
             # to manually correct bbs position with drag&drop

@@ -61,7 +61,7 @@ def save_cli(path, results, mode):
                     """,
             prompt_suffix="\rYour choice: ",
             type=str,
-            default="*",  # Save every style for now
+            default="t",  # Save 10 columns version
         )
         if lut_style == "c":
             save_lut(path, results, "classic")
@@ -90,7 +90,7 @@ def save_cli(path, results, mode):
 
 @click.command(context_settings=CONTEXT_SETTINGS)
 @click.option(
-    "--mode", "-m", help="Acquisition modality: 'cbct' or '2d'", default="cbct"
+    "--mode", "-m", help="Acquisition modality: 'cbct'", default="cbct"
 )
 @click.option(
     "--input_path",
@@ -137,12 +137,6 @@ def save_cli(path, results, mode):
     default=0.0,
 )
 @click.option(
-    "--eccentric",
-    type=click.BOOL,
-    help="Projections are acquired in eccentric mode (need to fix imgLabels angles)",
-    default=False,
-)
-@click.option(
     "--drag_every",
     type=click.INT,
     help="Manually reposition the reference points every N projections",
@@ -171,7 +165,6 @@ def main(
     py,
     sx,
     sy,
-    eccentric,
     drag_every,
     debug_level,
     ref,
@@ -217,20 +210,6 @@ def main(
     Source offset: {sx}, {sy}"""
     )
 
-    if eccentric:
-        logging.info(
-            "Eccentric mode detected. Loading polynomial for gantry angles fix..."
-        )
-        eccentric_poly = read_fix_poly(
-            # os.path.join(APP_DATA_PATH, f"poly5_r{int(sx)}.npy")
-            os.path.join(
-                APP_DATA_PATH, f"poly5_r80_360.npy"
-            )  #!!! cambiato solo per test con ecc360
-        )
-        logging.info("Polynomial for gantry angles fix loaded.")
-    else:
-        eccentric_poly = None
-
     # Just to avoid division by zero, in case user wrongly set this parameter
     if drag_every == 0:
         drag_every = 1000
@@ -253,9 +232,13 @@ def main(
             source_offset=[sx, sy],
             drag_every=drag_every,
             debug_level=debug_level,
-            eccentric_poly=eccentric_poly,
         )
     elif mode == "2d":
+        # calibration 2d doesn't work, please use matlab file instead
+        logging.critical(
+            f"Mode {mode} is not supported. PLease use matlab file for static calibration."
+        )
+        """
         calibration_results = calibrate_2d(
             projection_dir=input_path,
             bbs_3d=bbs,
@@ -265,6 +248,7 @@ def main(
             source_offset=[sx, sy],
             debug_level=debug_level,
         )
+        """
     else:
         logging.critical(
             f"Mode {mode} not recognized. Please choose between '2d' or 'cbct'."
