@@ -1,2 +1,2 @@
-geoCal.exe --config geoCal_config.ini
+geoCal\geoCal.exe --config geoCal_config.ini
 PAUSE
